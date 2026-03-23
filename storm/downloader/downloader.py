@@ -186,6 +186,10 @@ class FMPPriceDownloader(AbstractDownloader):
 
                 df = pd.concat([df, chunk_df], axis=0)
 
+        if df.empty or "timestamp" not in df.columns:
+            logger.error(f"No valid prices downloaded for {symbol}")
+            return
+
         df = df.sort_values(by="timestamp", ascending=True)
         df = df[["timestamp"] + [col for col in df.columns if col != "timestamp"]]
         df.to_csv(os.path.join(self.exp_path, "{}.csv".format(symbol)), index=False)
@@ -330,6 +334,10 @@ class FMPNewsDownloader(AbstractDownloader):
 
                 df = pd.concat([df, chunk_df], axis=0)
 
+        if df.empty or "timestamp" not in df.columns:
+            logger.error(f"No valid news downloaded for {symbol}")
+            return
+
         df = df.sort_values(by="timestamp", ascending=True)
         df = df.drop_duplicates(subset=["publishedDate", "title"], keep="first")
         df = df[["timestamp"] + [col for col in df.columns if col != "timestamp"]]
@@ -428,3 +436,4 @@ class Downloader(AbstractDownloader):
 
         save_dir = os.path.join(news_dir, "fmp")
         self._download_fmp_news(save_dir = save_dir)
+

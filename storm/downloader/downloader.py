@@ -38,7 +38,7 @@ class FMPPriceDownloader(AbstractDownloader):
         self.start_date = start_date
         self.end_date = end_date
 
-        self.request_url = "https://financialmodelingprep.com/api/v3/historical-price-full/{}?from={}&to={}&apikey={}"
+        self.request_url = "https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={}&from={}&to={}&apikey={}"
 
         self.exp_path = exp_path
         os.makedirs(self.exp_path, exist_ok=True)
@@ -51,7 +51,7 @@ class FMPPriceDownloader(AbstractDownloader):
 
         for (start, end) in intervals:
             name = "{}".format(start.strftime("%Y-%m-%d"))
-            if os.path.exists(os.path.join(self.exp_path, symbol, name)):
+            if os.path.exists(os.path.join(self.exp_path, symbol, f"{name}.csv")):
                 item = {
                     "name": name,
                     "downloaded": True,
@@ -133,7 +133,10 @@ class FMPPriceDownloader(AbstractDownloader):
                     try:
                         time.sleep(1)
                         aggs = get_jsonparsed_data(request_url)
-                        aggs = aggs["historical"] if "historical" in aggs else []
+                        if isinstance(aggs, dict):
+                            aggs = aggs["historical"] if "historical" in aggs else []
+                        elif not isinstance(aggs, list):
+                            aggs = []
                     except Exception as e:
                         logger.error(e)
                         aggs = []
@@ -143,19 +146,36 @@ class FMPPriceDownloader(AbstractDownloader):
                         continue
 
                     for a in aggs:
-                        chunk_df["open"].append(a["open"])
-                        chunk_df["high"].append(a["high"])
-                        chunk_df["low"].append(a["low"])
-                        chunk_df["close"].append(a["close"])
-                        chunk_df["volume"].append(a["volume"])
-                        chunk_df["timestamp"].append(a["date"])
-                        chunk_df["adjClose"].append(a["adjClose"])
-                        chunk_df["unadjustedVolume"].append(a["unadjustedVolume"])
-                        chunk_df["change"].append(a["change"])
-                        chunk_df["changePercent"].append(a["changePercent"])
-                        chunk_df["vwap"].append(a["vwap"])
-                        chunk_df["label"].append(a["label"])
-                        chunk_df["changeOverTime"].append(a["changeOverTime"])
+                        open_price = a.get("open", a.get("Open"))
+                        high_price = a.get("high", a.get("High"))
+                        low_price = a.get("low", a.get("Low"))
+                        close_price = a.get("close", a.get("Close"))
+                        volume = a.get("volume", a.get("Volume", 0))
+                        timestamp = a.get("date", a.get("Date"))
+                        adj_close = a.get("adjClose", a.get("adj_close", close_price))
+                        unadjusted_volume = a.get("unadjustedVolume", volume)
+                        change = a.get("change", 0.0)
+                        change_percent = a.get("changePercent", 0.0)
+                        vwap = a.get("vwap", close_price)
+                        label = a.get("label", "")
+                        change_over_time = a.get("changeOverTime", 0.0)
+
+                        if timestamp is None:
+                            continue
+
+                        chunk_df["open"].append(open_price)
+                        chunk_df["high"].append(high_price)
+                        chunk_df["low"].append(low_price)
+                        chunk_df["close"].append(close_price)
+                        chunk_df["volume"].append(volume)
+                        chunk_df["timestamp"].append(timestamp)
+                        chunk_df["adjClose"].append(adj_close)
+                        chunk_df["unadjustedVolume"].append(unadjusted_volume)
+                        chunk_df["change"].append(change)
+                        chunk_df["changePercent"].append(change_percent)
+                        chunk_df["vwap"].append(vwap)
+                        chunk_df["label"].append(label)
+                        chunk_df["changeOverTime"].append(change_over_time)
 
                     chunk_df = pd.DataFrame(chunk_df, index=range(len(chunk_df["timestamp"])))
                     chunk_df["timestamp"] = pd.to_datetime(chunk_df["timestamp"]).apply(
@@ -204,7 +224,7 @@ class FMPNewsDownloader(AbstractDownloader):
         for (start, end) in intervals:
             for page in range(1, self.max_pages + 1):
                 name = "{}_page_{:04d}".format(start.strftime("%Y-%m-%d"), page)
-                if os.path.exists(os.path.join(self.exp_path, symbol, name)):
+                if os.path.exists(os.path.join(self.exp_path, symbol, f"{name}.csv")):
                     item = {
                         "name": name,
                         "downloaded": True,
@@ -408,4 +428,3 @@ class Downloader(AbstractDownloader):
 
         save_dir = os.path.join(news_dir, "fmp")
         self._download_fmp_news(save_dir = save_dir)
-

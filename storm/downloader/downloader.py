@@ -431,9 +431,9 @@ class Downloader(AbstractDownloader):
         save_dir = os.path.join(self.exp_path, "price")
         self._download_fmp_price(save_dir = save_dir)
 
-        news_dir = os.path.join(self.exp_path, "news")
-        os.makedirs(news_dir, exist_ok=True)
+        # news_dir = os.path.join(self.exp_path, "news")
+        # os.makedirs(news_dir, exist_ok=True)
 
-        save_dir = os.path.join(news_dir, "fmp")
-        self._download_fmp_news(save_dir = save_dir)
+        # save_dir = os.path.join(news_dir, "fmp")
+        # self._download_fmp_news(save_dir = save_dir)
 

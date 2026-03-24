@@ -1,4 +1,4 @@
-from torch.utils.tensorboard import SummaryWriter
+﻿from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator
 
 from storm.utils import is_main_process
@@ -56,6 +56,11 @@ class TensorboardLogger(SummaryWriter, metaclass=Singleton):
                                new_style,
                                double_precision)
 
+    def log_scalar(self, tag, scalar_value, global_step=None, walltime=None, new_style=False, double_precision=False):
+        """
+        Compatibility wrapper used by trainer code.
+        """
+        self.add_scalar(tag, scalar_value, global_step, walltime, new_style, double_precision)
     def add_image(self,
                   tag,
                   img_tensor,

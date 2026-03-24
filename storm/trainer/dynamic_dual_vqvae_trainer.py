@@ -1,4 +1,4 @@
-import os
+﻿import os
 import torch
 from typing import Any, Dict
 from glob import glob
@@ -97,6 +97,7 @@ class DynamicDualVQVAETrainer():
         self.model = self.accelerator.prepare(self.vae)
         self.model_ema = self.accelerator.prepare(self.vae_ema)
 
+
         if hasattr(self.model, "_set_static_graph"):
             self.model._set_static_graph()
             
@@ -153,7 +154,7 @@ class DynamicDualVQVAETrainer():
         if len(checkpoint_files) > self.num_checkpoint_del:
             for checkpoint_file in checkpoint_files[:-self.num_checkpoint_del]:
                 os.remove(checkpoint_file)
-                self.logger.info(f"｜ Checkpoint deleted: {checkpoint_file}")
+                self.logger.info(f"锝?Checkpoint deleted: {checkpoint_file}")
 
         self.logger.info(f"| Checkpoint saved: {checkpoint_file}")
 

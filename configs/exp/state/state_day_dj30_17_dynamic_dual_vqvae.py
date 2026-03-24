@@ -1,4 +1,4 @@
-﻿_base_ = '../pretrain/pretrain_day_dj30_17_dynamic_dual_vqvae.py'
+_base_ = '../pretrain/pretrain_day_dj30_17_dynamic_dual_vqvae.py'
 
 test_dataset = dict(
     scaler_file="state_scalers.joblib",

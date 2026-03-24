@@ -1,4 +1,4 @@
-﻿workdir = "workdir"
+workdir = "workdir"
 tag = "dj30_17"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"

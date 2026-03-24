@@ -1,4 +1,4 @@
-import os
+﻿import os
 import wandb
 from dotenv import load_dotenv
 from accelerate import Accelerator
@@ -16,6 +16,7 @@ __all__ = [
 class WandbLogger(metaclass=Singleton):
     def __init__(self):
         self.is_main_process = True
+        self.initialized = False
 
     def init_logger(self, project, name, config, dir, accelerator: Accelerator = None):
         if accelerator is None:
@@ -26,13 +27,15 @@ class WandbLogger(metaclass=Singleton):
         if self.is_main_process:
             wandb.login(key=os.environ["WANDB_API_KEY"])
             wandb.init(project=project, name=name, config=config, dir=dir)
+            self.initialized = True
 
     def log(self, log_dict):
-        if self.is_main_process:
+        if self.is_main_process and self.initialized:
             wandb.log(log_dict)
 
     def finish(self):
-        if self.is_main_process:
+        if self.is_main_process and self.initialized:
             wandb.finish()
+            self.initialized = False
 
 wandb_logger = WandbLogger()

@@ -1,5 +1,5 @@
 import torch
-from transformers.optimization import AdamW
+from torch.optim import AdamW
 from colossalai.nn.optimizer import HybridAdam
 
 from storm.registry import OPTIMIZER

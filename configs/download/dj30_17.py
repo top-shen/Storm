@@ -1,0 +1,13 @@
+﻿workdir = "workdir"
+tag = "dj30_17"
+exp_path = f"{workdir}/{tag}"
+log_file = "storm.log"
+
+downloader = dict(
+    type = "Downloader",
+    assets_path = "configs/_asset_list_/dj30_17.json",
+    start_date = "1995-01-01",
+    end_date = "2025-01-01",
+    exp_path = exp_path,
+    batch_size = 1,
+)

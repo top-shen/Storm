@@ -1,4 +1,4 @@
-from copy import deepcopy
+﻿from copy import deepcopy
 from datetime import datetime
 from storm.registry import PROCESSOR
 import os
@@ -198,7 +198,12 @@ class Processor():
 
     def _init_assets(self):
         assets = load_json(self.assets_path)
-        assets = [asset["symbol"] for asset in assets]
+        if isinstance(assets, dict):
+            assets = list(assets.keys())
+        elif isinstance(assets, list):
+            assets = [asset["symbol"] for asset in assets]
+        else:
+            raise ValueError("Unsupported assets format. Expected a dict or a list of dicts.")
         return assets
 
     def _process_price_and_features(self,

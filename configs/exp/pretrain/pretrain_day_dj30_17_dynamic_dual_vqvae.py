@@ -38,8 +38,8 @@ dit_weight_decay = 0.05
 dit_betas = (0.9, 0.95)
 
 # scheduler
-num_training_epochs = int(1000)
-num_training_warmup_epochs = int(100)
+num_training_epochs = int(300)
+num_training_warmup_epochs = int(30)
 num_checkpoint_del = 10
 checkpoint_period = 20
 repeat_aug = 1
@@ -607,4 +607,5 @@ trainer = dict(
     plot = None,
     accelerator = None,
 )
+
 

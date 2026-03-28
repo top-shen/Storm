@@ -1,5 +1,5 @@
 ﻿workdir = "workdir"
-tag = "pretrain_day_dj30_17_dynamic_dual_vqvae"
+tag = "pretrain_day_dj30_17_dynamic_dual_vqvae_300e"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"
@@ -607,5 +607,6 @@ trainer = dict(
     plot = None,
     accelerator = None,
 )
+
 
 

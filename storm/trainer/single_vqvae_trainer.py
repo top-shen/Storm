@@ -91,7 +91,8 @@ class SingleVQVAETrainer():
         self.model = self.accelerator.prepare(self.vae)
         self.model_ema = self.accelerator.prepare(self.vae_ema)
 
-        self.model._set_static_graph()
+        if hasattr(self.model, "_set_static_graph"):
+            self.model._set_static_graph()
 
         if self.vae_loss_fn:
             self.vae_loss_fn = self.accelerator.prepare(self.vae_loss_fn)
@@ -146,7 +147,7 @@ class SingleVQVAETrainer():
         if len(checkpoint_files) > self.num_checkpoint_del:
             for checkpoint_file in checkpoint_files[:-self.num_checkpoint_del]:
                 os.remove(checkpoint_file)
-                self.logger.info(f"｜ Checkpoint deleted: {checkpoint_file}")
+                self.logger.info(f"| Checkpoint deleted: {checkpoint_file}")
 
         self.logger.info(f"| Checkpoint saved: {checkpoint_file}")
 
@@ -476,7 +477,8 @@ class SingleVQVAETrainer():
                     if if_use_wandb and self.wandb:
                         wandb_dict[f"{prefix}/{key}"] = value
 
-                self.wandb.log(wandb_dict)
+                if if_use_wandb and self.wandb:
+                    self.wandb.log(wandb_dict)
 
             metric_logger.update(**records)
             metric_logger.synchronize_between_processes()
@@ -665,7 +667,8 @@ class SingleVQVAETrainer():
                 self.writer.log_scalar(f"{prefix}/{key}", value, epoch)
             if if_use_wandb and self.wandb:
                 wandb_dict[f"{prefix}/{key}"] = value
-        self.wandb.log(wandb_dict)
+        if if_use_wandb and self.wandb:
+            self.wandb.log(wandb_dict)
 
         if if_use_writer and self.is_main_process:
             self.writer.flush()

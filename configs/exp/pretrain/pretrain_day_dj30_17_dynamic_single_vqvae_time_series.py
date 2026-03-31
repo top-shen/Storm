@@ -1,5 +1,9 @@
 workdir = "workdir"
+<<<<<<< HEAD
 tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_200e"
+=======
+tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_500e"
+>>>>>>> 204f3a67944e6f96370f2c53f7f44c258244f62b
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"
@@ -38,8 +42,8 @@ dit_weight_decay = 0.05
 dit_betas = (0.9, 0.95)
 
 # scheduler
-num_training_epochs = int(200)
-num_training_warmup_epochs = int(20)
+num_training_epochs = int(500)
+num_training_warmup_epochs = int(50)
 num_checkpoint_del = 10
 checkpoint_period = 20
 repeat_aug = 1

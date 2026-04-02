@@ -641,12 +641,9 @@ class DynamicSingleVQVAETrainer():
             end_timestamp = end_timestamp.detach()
 
             rankic = RankIC(pred_label, labels)
-            rankics.append(rankic)
+            rankics.append(rankic.item())
 
-            rankicir = RankICIR(rankics)
-
-            records.update(data={"RANKIC": rankic, "RANKICIR": rankicir},
-                           extra_info={"end_timestamp": end_timestamp,
+            records.update(extra_info={"end_timestamp": end_timestamp,
                                        "pred_label": pred_label, "true_label": labels})
 
         # gather data from multi gpu
@@ -659,9 +656,15 @@ class DynamicSingleVQVAETrainer():
         metrics = dict()
         for key, values in combiner.items():
             metrics[key] = np.mean(values)
-        if "RANKIC" in combiner and len(combiner["RANKIC"]) > 1:
-            rankic_values = np.asarray(combiner["RANKIC"], dtype=np.float64)
-            metrics["RANKICIR"] = np.mean(rankic_values) / (np.std(rankic_values) + 1e-6)
+
+        rankic_values = np.asarray(rankics, dtype=np.float64)
+        if rankic_values.size > 0:
+            metrics["RANKIC"] = float(np.mean(rankic_values))
+        else:
+            metrics["RANKIC"] = 0.0
+
+        if rankic_values.size > 1:
+            metrics["RANKICIR"] = float(np.mean(rankic_values) / (np.std(rankic_values) + 1e-6))
         else:
             metrics["RANKICIR"] = 0.0
 

@@ -154,8 +154,7 @@ class DynamicSingleVQVAETrainer():
         if len(checkpoint_files) > self.num_checkpoint_del:
             for checkpoint_file in checkpoint_files[:-self.num_checkpoint_del]:
                 os.remove(checkpoint_file)
-                self.logger.info(f"｜ Checkpoint deleted: {checkpoint_file}")
-
+                self.logger.info(f"| Checkpoint deleted: {checkpoint_file}")
         self.logger.info(f"| Checkpoint saved: {checkpoint_file}")
 
     def load_checkpoint(self, epoch: int = -1, checkpoint_file: str = None, if_best: bool = False):
@@ -660,7 +659,11 @@ class DynamicSingleVQVAETrainer():
         metrics = dict()
         for key, values in combiner.items():
             metrics[key] = np.mean(values)
-        metrics["RANKICIR"] = gathered_item["RANKICIR"]
+        if "RANKIC" in combiner and len(combiner["RANKIC"]) > 1:
+            rankic_values = np.asarray(combiner["RANKIC"], dtype=np.float64)
+            metrics["RANKICIR"] = np.mean(rankic_values) / (np.std(rankic_values) + 1e-6)
+        else:
+            metrics["RANKICIR"] = 0.0
 
         # Process extra records
         if self.is_main_process:

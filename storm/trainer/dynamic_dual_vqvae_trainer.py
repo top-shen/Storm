@@ -97,8 +97,10 @@ class DynamicDualVQVAETrainer():
         self.model = self.accelerator.prepare(self.vae)
         self.model_ema = self.accelerator.prepare(self.vae_ema)
 
-        if hasattr(self.model, "_set_static_graph"):`r`n            self.model._set_static_graph()
 
+        if hasattr(self.model, "_set_static_graph"):
+            self.model._set_static_graph()
+            
         if self.vae_loss_fn:
             self.vae_loss_fn = self.accelerator.prepare(self.vae_loss_fn)
         if self.price_cont_loss_fn:

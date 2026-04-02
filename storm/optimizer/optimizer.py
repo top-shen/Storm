@@ -1,4 +1,5 @@
-﻿import torch
+import torch
+
 from torch.optim import AdamW
 from colossalai.nn.optimizer import HybridAdam
 

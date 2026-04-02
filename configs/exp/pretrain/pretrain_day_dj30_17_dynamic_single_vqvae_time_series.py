@@ -1,5 +1,9 @@
 workdir = "workdir"
+<<<<<<< HEAD
+tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_200e"
+=======
 tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_500e"
+>>>>>>> 204f3a67944e6f96370f2c53f7f44c258244f62b
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"

@@ -1,4 +1,4 @@
-﻿workdir = "workdir"
+workdir = "workdir"
 tag = "processd_day_dj30_17"
 batch_size = 5
 

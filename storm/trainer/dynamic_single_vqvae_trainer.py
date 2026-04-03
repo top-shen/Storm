@@ -12,7 +12,7 @@ from storm.registry import DOWNSTREAM
 from storm.utils import check_data
 from storm.utils import SmoothedValue
 from storm.utils import MetricLogger
-from storm.metrics import MSE, RankICIR, RankIC
+from storm.metrics import MSE, RankICIR, RankIC, RankICSeries
 from storm.models import get_patch_info, patchify
 from storm.utils import convert_int_to_timestamp
 from storm.utils import save_joblib
@@ -230,12 +230,12 @@ class DynamicSingleVQVAETrainer():
                  if_use_writer = True,
                  if_use_wandb = True,
                  if_plot = False,
-                 mode = "train"
+                 mode = "train",
+                 if_update = True
                  ):
-
         self.check_batch_info_flag = True if epoch == self.start_epoch else False
 
-        if_train = mode == "train"
+        if_train = mode == "train" and if_update
 
         records = Records(accelerator=self.accelerator)
         metric_logger = MetricLogger(delimiter="  ")
@@ -541,6 +541,10 @@ class DynamicSingleVQVAETrainer():
             sample_batchs = random.sample(range(len(dataloader)), num_plot_sample_batch)
 
         rankics = []
+        mses = []
+        pred_labels_all = []
+        true_labels_all = []
+        end_timestamps_all = []
         for data_iter_step, batch in enumerate(metric_logger.log_every(dataloader,
                                                                        self.logger,
                                                                        self.print_freq,
@@ -631,31 +635,21 @@ class DynamicSingleVQVAETrainer():
             restored_target_prices = restored_target_prices.detach()
 
             mse = MSE(restored_target_prices, restored_pred_prices)
-
-            records.update({
-                "MSE": mse
-            })
+            mses.append(float(mse.detach().cpu().item()))
 
             pred_label = pred_label.detach()
             labels = labels.detach()
             end_timestamp = end_timestamp.detach()
 
-            rankic = RankIC(pred_label, labels)
-            rankics.append(rankic.item())
+            batch_rankics = RankICSeries(pred_label, labels)
+            rankics.extend(batch_rankics.detach().cpu().tolist())
 
-            records.update(extra_info={"end_timestamp": end_timestamp,
-                                       "pred_label": pred_label, "true_label": labels})
+            end_timestamps_all.append(end_timestamp.cpu().numpy())
+            pred_labels_all.append(pred_label.cpu().numpy())
+            true_labels_all.append(labels.cpu().numpy())
 
-        # gather data from multi gpu
-        records.gather()
-        gathered_item = records.gathered_item
-        combiner = records.combiner
-        extra_combiner = records.extra_combiner
-
-        # Process records
         metrics = dict()
-        for key, values in combiner.items():
-            metrics[key] = np.mean(values)
+        metrics["MSE"] = float(np.mean(mses)) if len(mses) > 0 else 0.0
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
         if rankic_values.size > 0:
@@ -669,14 +663,10 @@ class DynamicSingleVQVAETrainer():
             metrics["RANKICIR"] = 0.0
 
         # Process extra records
-        if self.is_main_process:
-            end_timestamps = extra_combiner["end_timestamp"]
-            pred_labels = extra_combiner["pred_label"]
-            true_labels = extra_combiner["true_label"]
-
-            end_timestamps = np.concatenate(end_timestamps, axis=0)
-            pred_labels = np.concatenate(pred_labels, axis=0)
-            true_labels = np.concatenate(true_labels, axis=0)
+        if self.is_main_process and len(end_timestamps_all) > 0:
+            end_timestamps = np.concatenate(end_timestamps_all, axis=0)
+            pred_labels = np.concatenate(pred_labels_all, axis=0)
+            true_labels = np.concatenate(true_labels_all, axis=0)
 
             # sort according to end_timestamp
             indices = np.argsort(end_timestamps)
@@ -910,10 +900,10 @@ class DynamicSingleVQVAETrainer():
 
         train_stats = self.run_step(epoch,
                                     mode="train",
+                                    if_update=False,
                                     if_use_writer=False,
                                     if_use_wandb=False,
                                     if_plot=False)
-
         valid_stats = self.run_step(epoch,
                                     mode="valid",
                                     if_use_writer=False,

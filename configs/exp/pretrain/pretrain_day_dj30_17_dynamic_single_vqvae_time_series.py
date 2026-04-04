@@ -1,5 +1,5 @@
 workdir = "workdir"
-tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_500e"
+tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_500e_h8"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"
@@ -63,7 +63,7 @@ dit_mlp_ratio = 4.0
 
 decoder_embed_dim = 256
 decoder_depth = 2
-decoder_num_heads = 4
+decoder_num_heads = 8
 decoder_mlp_ratio = 4.0
 pred_dim = 5 # "open","high","low","close", "adj_close"
 

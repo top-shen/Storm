@@ -253,7 +253,8 @@ class DynamicSingleVQVAETrainer():
             if_mask = self.model.if_mask
 
         if mode == "train":
-            metric_logger.add_meter("lr", SmoothedValue(window_size=1, fmt="{value:.6f}"))
+            if if_train:
+                metric_logger.add_meter("lr", SmoothedValue(window_size=1, fmt="{value:.6f}"))
 
             header = f"| Train Epoch: [{epoch}/{self.num_training_epochs}]"
             global_step = self.global_train_step

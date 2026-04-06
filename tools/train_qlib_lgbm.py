@@ -13,7 +13,7 @@ from mmengine import DictAction
 
 from storm.config import build_config
 from storm.log import logger
-from storm.qlib_adapter import build_qlib_dataframe, calc_prediction_metrics
+from storm.qlib_adapter import build_windowed_qlib_dataframe, calc_prediction_metrics
 from storm.utils import assemble_project_path, save_joblib, load_joblib
 
 
@@ -50,13 +50,15 @@ def _build_dataset(config):
     from qlib.data.dataset import DatasetH
     from qlib.data.dataset.handler import DataHandlerLP
 
-    df = build_qlib_dataframe(
+    df = build_windowed_qlib_dataframe(
         data_path=config.data.data_path,
         assets_path=config.data.assets_path,
         feature_columns=config.feature_columns,
+        history_timestamps=config.history_timestamps,
         label_column=config.label_column,
         start_time=config.data.start_time,
         end_time=config.data.end_time,
+        include_asset_identity=getattr(config, "include_asset_identity", True),
     )
 
     handler = DataHandlerLP.from_df(df)
@@ -106,7 +108,7 @@ def main(args):
     _init_qlib(config)
     dataset, qlib_df = _build_dataset(config)
 
-    logger.info(f"| Qlib dataframe shape: {qlib_df.shape}")
+    logger.info(f"| Qlib windowed dataframe shape: {qlib_df.shape}")
     logger.info(f"| Qlib dataframe index range: {qlib_df.index.get_level_values(0).min()} -> {qlib_df.index.get_level_values(0).max()}")
 
     model_path = os.path.join(config.checkpoint_path, config.model_file)

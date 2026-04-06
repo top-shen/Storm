@@ -5,6 +5,7 @@ log_file = "storm.log"
 checkpoint_path = "checkpoint"
 model_file = "best.pkl"
 seed = 1337
+if_remove = False
 
 qlib_init = dict(
     provider_uri=None,
@@ -57,5 +58,6 @@ model = dict(
     num_threads=20,
     seed=seed,
 )
+
 
 

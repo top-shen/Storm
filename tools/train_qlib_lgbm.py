@@ -71,11 +71,13 @@ def _segment_label_frame(dataset, segment):
 
 
 def _save_predictions(exp_path, split, pred_series, label_df):
-    merged = label_df.join(pred_series.to_frame(name="score"), how="inner")
+    pred_frame = pred_series.to_frame(name="score")
+    pred_frame.columns = pd.MultiIndex.from_tuples([("prediction", "score")])
+    merged = pd.concat([label_df, pred_frame], axis=1, join="inner")
     payload = {
         "end_timestamp": [idx[0].strftime("%Y-%m-%d") for idx in merged.index],
         "asset": [idx[1] for idx in merged.index],
-        "pred_label": merged["score"].to_numpy(),
+        "pred_label": merged[("prediction", "score")].to_numpy(),
         "true_label": merged[("label", "ret1")].to_numpy(),
     }
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))

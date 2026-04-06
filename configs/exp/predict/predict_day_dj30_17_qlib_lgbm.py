@@ -2,8 +2,11 @@ workdir = "workdir"
 tag = "predict_day_dj30_17_qlib_lgbm"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
+tensorboard_path = "tensorboard"
 checkpoint_path = "checkpoint"
+wandb_path = "wandb"
 model_file = "best.pkl"
+project = "storm"
 seed = 1337
 if_remove = False
 

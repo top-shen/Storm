@@ -1,4 +1,4 @@
-from .vae_trainer import VAETrainer
+﻿from .vae_trainer import VAETrainer
 from .vqvae_trainer import VQVAETrainer
 from .factorvae_trainer import FactorVAETrainer
 from .dual_vqvae_trainer import DualVQVAETrainer
@@ -12,3 +12,4 @@ from .sac_trainer import SACTrainer
 from .bcq_gpt_trainer import BCQGPTTrainer
 from .bcq_trainer import BCQTrainer
 from .cql_trainer import CQLTrainer
+

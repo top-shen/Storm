@@ -16,17 +16,17 @@ def _load_assets(assets_path: str) -> List[str]:
     raise ValueError("Unsupported assets format. Expected a dict or a list of dicts.")
 
 
-def _load_asset_frames(data_path: str,
-                       assets_path: str,
-                       feature_columns: Iterable[str],
-                       label_column: str,
-                       start_time: str = None,
-                       end_time: str = None):
+def build_qlib_dataframe(data_path: str,
+                         assets_path: str,
+                         feature_columns: Iterable[str],
+                         label_column: str = "ret1",
+                         start_time: str = None,
+                         end_time: str = None) -> pd.DataFrame:
     data_path = assemble_project_path(data_path)
     assets = _load_assets(assets_path)
     feature_columns = list(feature_columns)
 
-    frames = {}
+    frames = []
     for asset in assets:
         csv_path = os.path.join(data_path, f"{asset}.csv")
         df = pd.read_csv(csv_path, index_col=0)
@@ -39,62 +39,22 @@ def _load_asset_frames(data_path: str,
             df = df.loc[:pd.Timestamp(end_time)]
 
         use_columns = feature_columns + [label_column]
-        frames[asset] = df[use_columns].copy()
-    return assets, frames, feature_columns
+        df = df[use_columns].copy()
+        df["instrument"] = asset
+        df = df.reset_index().set_index(["datetime", "instrument"]).sort_index()
 
+        feature_df = df[feature_columns].copy()
+        feature_df.columns = pd.MultiIndex.from_product([["feature"], feature_df.columns])
 
-def build_windowed_qlib_dataframe(data_path: str,
-                                  assets_path: str,
-                                  feature_columns: Iterable[str],
-                                  history_timestamps: int,
-                                  label_column: str = "ret1",
-                                  start_time: str = None,
-                                  end_time: str = None) -> pd.DataFrame:
-    assets, frames, feature_columns = _load_asset_frames(
-        data_path=data_path,
-        assets_path=assets_path,
-        feature_columns=feature_columns,
-        label_column=label_column,
-        start_time=start_time,
-        end_time=end_time,
-    )
+        label_df = df[[label_column]].copy()
+        label_df.columns = pd.MultiIndex.from_product([["label"], label_df.columns])
 
-    first_asset = assets[0]
-    first_df = frames[first_asset]
+        frames.append(pd.concat([feature_df, label_df], axis=1))
 
-    flattened_columns = []
-    for lag in range(history_timestamps):
-        offset = history_timestamps - 1 - lag
-        for feature in feature_columns:
-            flattened_columns.append(f"{feature}_t-{offset}")
-
-    rows = []
-    index = []
-
-    for i in range(history_timestamps, len(first_df)):
-        end_index = i - 1
-        end_timestamp = first_df.index[end_index]
-
-        for asset in assets:
-            asset_df = frames[asset]
-            window = asset_df.iloc[i - history_timestamps:i][feature_columns]
-            if len(window) != history_timestamps:
-                continue
-
-            label_value = asset_df.iloc[end_index][label_column]
-            if pd.isna(label_value):
-                continue
-
-            rows.append(list(window.to_numpy(dtype="float32").reshape(-1)) + [float(label_value)])
-            index.append((end_timestamp, asset))
-
-    columns = pd.MultiIndex.from_tuples(
-        [("feature", col) for col in flattened_columns] + [("label", label_column)]
-    )
-    qlib_df = pd.DataFrame(rows, index=pd.MultiIndex.from_tuples(index, names=["datetime", "instrument"]), columns=columns)
+    qlib_df = pd.concat(frames, axis=0).sort_index()
     qlib_df = qlib_df.replace([float("inf"), float("-inf")], pd.NA)
     qlib_df = qlib_df.dropna(subset=[("label", label_column)])
-    return qlib_df.sort_index()
+    return qlib_df
 
 
 def calc_prediction_metrics(label_df: pd.DataFrame, pred_series: pd.Series, label_column: str = "ret1") -> Dict[str, float]:

@@ -15,6 +15,8 @@ qlib_init = dict(
     region="cn",
 )
 
+# LGBM now uses Qlib-style daily tabular factor inputs rather than STORM 64-day windows.
+# history_timestamps is kept only as a reference to the original STORM setup and is not used by this baseline.
 history_timestamps = 64
 feature_columns = [
     "open","high","low","close","adj_close","kmid","kmid2","klen","kup","kup2","klow","klow2","ksft","ksft2",

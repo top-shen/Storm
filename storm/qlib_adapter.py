@@ -100,17 +100,18 @@ def build_windowed_qlib_dataframe(data_path: str,
 def calc_prediction_metrics(label_df: pd.DataFrame, pred_series: pd.Series, label_column: str = "ret1") -> Dict[str, float]:
     pred_name = pred_series.name if pred_series.name is not None else "score"
     pred_frame = pred_series.to_frame(name=pred_name)
-    merged = label_df.join(pred_frame, how="inner")
+    pred_frame.columns = pd.MultiIndex.from_tuples([("prediction", pred_name)])
+    merged = pd.concat([label_df, pred_frame], axis=1, join="inner")
 
     y_true = merged[("label", label_column)].astype(float)
-    y_pred = merged[pred_name].astype(float)
+    y_pred = merged[("prediction", pred_name)].astype(float)
     mse = float(((y_true - y_pred) ** 2).mean())
 
     rankics = []
     for _, group in merged.groupby(level=0):
         if len(group) < 2:
             continue
-        rankic = group[("label", label_column)].corr(group[pred_name], method="spearman")
+        rankic = group[("label", label_column)].corr(group[("prediction", pred_name)], method="spearman")
         if pd.notna(rankic):
             rankics.append(float(rankic))
 

@@ -1,4 +1,4 @@
-﻿workdir = "workdir"
+workdir = "workdir"
 tag = "predict_day_dj30_17_qlib_lgbm"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"

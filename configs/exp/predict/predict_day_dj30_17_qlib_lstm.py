@@ -45,7 +45,7 @@ data = dict(
 
 
 processor = dict(
-    use_qlib_processors=True,
+    use_qlib_processors=False,
     clip_outlier=True,
 )
 

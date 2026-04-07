@@ -150,6 +150,48 @@ def build_windowed_qlib_dataframe(
     return qlib_df.sort_index()
 
 
+def apply_qlib_like_processors(
+    qlib_df: pd.DataFrame,
+    fit_start_time: str,
+    fit_end_time: str,
+    label_column: str = "ret1",
+    clip_outlier: bool = True,
+) -> pd.DataFrame:
+    processed = qlib_df.copy()
+
+    feature_df = processed["feature"].astype(float)
+    feature_df = feature_df.replace([float("inf"), float("-inf")], pd.NA)
+
+    datetimes = processed.index.get_level_values(0)
+    fit_mask = (datetimes >= pd.Timestamp(fit_start_time)) & (datetimes <= pd.Timestamp(fit_end_time))
+    fit_feature_df = feature_df.loc[fit_mask]
+
+    median = fit_feature_df.median(axis=0)
+    mad = (fit_feature_df - median).abs().median(axis=0)
+    scale = (mad * 1.4826).replace(0, pd.NA)
+
+    feature_df = (feature_df - median) / scale
+    if clip_outlier:
+        feature_df = feature_df.clip(-3, 3)
+    feature_df = feature_df.fillna(0.0)
+
+    label_df = processed["label"].astype(float).replace([float("inf"), float("-inf")], pd.NA)
+    label_df = label_df.dropna(subset=[label_column])
+    label_series = label_df[label_column].groupby(level=0).rank(pct=True) - 0.5
+    label_df[label_column] = label_series
+
+    processed = pd.concat(
+        [
+            pd.concat({"feature": feature_df}, axis=1),
+            pd.concat({"label": label_df}, axis=1),
+        ],
+        axis=1,
+        join="inner",
+    ).sort_index()
+
+    return processed
+
+
 def calc_prediction_metrics(
     label_df: pd.DataFrame,
     pred_series: pd.Series,

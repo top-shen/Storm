@@ -15,7 +15,7 @@ from mmengine import DictAction
 
 from storm.config import build_config
 from storm.log import logger
-from storm.qlib_adapter import build_qlib_dataframe, calc_prediction_metrics
+from storm.qlib_adapter import apply_qlib_like_processors, build_qlib_dataframe, calc_prediction_metrics
 from storm.utils import assemble_project_path, load_joblib, save_joblib
 
 
@@ -52,7 +52,7 @@ def _build_dataset(config):
     from qlib.data.dataset import TSDatasetH
     from qlib.data.dataset.handler import DataHandlerLP
 
-    df = build_qlib_dataframe(
+    raw_df = build_qlib_dataframe(
         data_path=config.data.data_path,
         assets_path=config.data.assets_path,
         feature_columns=config.feature_columns,
@@ -61,9 +61,21 @@ def _build_dataset(config):
         end_time=config.data.end_time,
     )
 
-    handler = DataHandlerLP.from_df(df)
+    fit_start_time, fit_end_time = config.segments["train"]
+    if getattr(config, "processor", None) and config.processor.get("use_qlib_processors", False):
+        model_df = apply_qlib_like_processors(
+            raw_df,
+            fit_start_time=fit_start_time,
+            fit_end_time=fit_end_time,
+            label_column=config.label_column,
+            clip_outlier=config.processor.get("clip_outlier", True),
+        )
+    else:
+        model_df = raw_df
+
+    handler = DataHandlerLP.from_df(model_df)
     dataset = TSDatasetH(handler=handler, segments=config.segments, step_len=config.history_timestamps)
-    return dataset, df
+    return dataset, raw_df, model_df
 
 
 def _segment_label_frame(qlib_df, config, segment):
@@ -126,11 +138,12 @@ def main(args):
     os.makedirs(config.checkpoint_path, exist_ok=True)
 
     _init_qlib(config)
-    dataset, qlib_df = _build_dataset(config)
+    dataset, raw_qlib_df, model_qlib_df = _build_dataset(config)
 
-    logger.info(f"| Qlib daily dataframe shape: {qlib_df.shape}")
+    logger.info(f"| Raw Qlib dataframe shape: {raw_qlib_df.shape}")
+    logger.info(f"| Model Qlib dataframe shape: {model_qlib_df.shape}")
     logger.info(
-        f"| Qlib dataframe index range: {qlib_df.index.get_level_values(0).min()} -> {qlib_df.index.get_level_values(0).max()}"
+        f"| Qlib dataframe index range: {raw_qlib_df.index.get_level_values(0).min()} -> {raw_qlib_df.index.get_level_values(0).max()}"
     )
 
     model_path = os.path.join(config.checkpoint_path, config.model_file)
@@ -148,7 +161,7 @@ def main(args):
         save_joblib(model, model_path)
         logger.info(f"| Saved Qlib LSTM model: {model_path}")
 
-        stats = _evaluate(model, dataset, qlib_df, config, config.exp_path)
+        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path)
         with open(os.path.join(config.exp_path, "train_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
         logger.info(f"| Qlib LSTM train/test stats: {stats}")
@@ -160,7 +173,7 @@ def main(args):
             raise FileNotFoundError(f"Qlib LSTM checkpoint not found: {ckpt}")
         logger.info(f"| Load Qlib LSTM model: {ckpt}")
 
-        stats = _evaluate(model, dataset, qlib_df, config, config.exp_path)
+        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path)
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
         logger.info(f"| Qlib LSTM test stats: {stats}")

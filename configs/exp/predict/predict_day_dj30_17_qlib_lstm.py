@@ -43,6 +43,12 @@ data = dict(
     end_time="2024-04-01",
 )
 
+
+processor = dict(
+    use_qlib_processors=True,
+    clip_outlier=True,
+)
+
 segments = dict(
     train=("2008-04-01", "2021-04-01"),
     valid=("2021-04-01", "2024-04-01"),

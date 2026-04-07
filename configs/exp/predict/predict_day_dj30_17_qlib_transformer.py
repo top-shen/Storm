@@ -15,7 +15,8 @@ qlib_init = dict(
     region="cn",
 )
 
-history_timestamps = 20
+history_timestamps = 64
+include_asset_identity = False
 feature_columns = [
     "open","high","low","close","adj_close","kmid","kmid2","klen","kup","kup2","klow","klow2","ksft","ksft2",
     "roc_5","roc_10","roc_20","roc_30","roc_60","ma_5","ma_10","ma_20","ma_30","ma_60",
@@ -44,7 +45,7 @@ data = dict(
 )
 
 processor = dict(
-    use_qlib_processors=True,
+    use_qlib_processors=False,
     clip_outlier=True,
 )
 

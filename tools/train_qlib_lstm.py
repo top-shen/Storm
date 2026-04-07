@@ -1,5 +1,7 @@
 import argparse
 import json
+import numpy as np
+import torch
 import os
 import pathlib
 import sys
@@ -84,14 +86,32 @@ def _save_predictions(exp_path, split, pred_series, label_df):
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))
 
 
+def _predict_segment(model, dataset, segment):
+    from torch.utils.data import DataLoader
+    from qlib.data.dataset.handler import DataHandlerLP
+
+    dl = dataset.prepare(segment, col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+    dl.config(fillna_type="ffill+bfill")
+    data_loader = DataLoader(dl, batch_size=model.batch_size, num_workers=model.n_jobs)
+
+    model.LSTM_model.eval()
+    preds = []
+    for data in data_loader:
+        feature = data[:, :, 0:-1].to(model.device)
+        with torch.no_grad():
+            pred = model.LSTM_model(feature.float()).detach().cpu().numpy()
+        preds.append(pred)
+
+    pred_series = pd.Series(np.concatenate(preds), index=dl.get_index())
+    pred_series.name = "score"
+    return pred_series
+
+
 def _evaluate(model, dataset, qlib_df, config, exp_path):
     stats = {}
     for split in ["train", "valid", "test"]:
-        pred = model.predict(dataset, segment=split)
+        pred = _predict_segment(model, dataset, split)
         label_df = _segment_label_frame(qlib_df, config, split)
-        if isinstance(pred, pd.DataFrame):
-            pred = pred.iloc[:, 0]
-        pred.name = "score"
         metrics = calc_prediction_metrics(label_df, pred, label_column=config.label_column)
         _save_predictions(exp_path, split, pred, label_df)
         stats.update({f"{split}_{k}": v for k, v in metrics.items()})

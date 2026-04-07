@@ -47,7 +47,7 @@ def _init_qlib(config):
 
 
 def _build_dataset(config):
-    from qlib.data.dataset import TSDatasetH
+    from qlib.data.dataset import DatasetH
     from qlib.data.dataset.handler import DataHandlerLP
 
     raw_df = build_qlib_dataframe(
@@ -72,7 +72,7 @@ def _build_dataset(config):
         model_df = raw_df
 
     handler = DataHandlerLP.from_df(model_df)
-    dataset = TSDatasetH(handler=handler, segments=config.segments, step_len=config.history_timestamps)
+    dataset = DatasetH(handler=handler, segments=config.segments)
     return dataset, raw_df, model_df
 
 

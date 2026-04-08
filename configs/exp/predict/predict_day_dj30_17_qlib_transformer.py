@@ -37,6 +37,8 @@ feature_columns = [
 ]
 label_column = "ret1"
 
+# Qlib baselines read processed CSV directly and do not use MultiAssetDataset scaler files.
+
 data = dict(
     data_path="workdir/processd_day_dj30_17/features",
     assets_path="configs/_asset_list_/dj30_17.json",

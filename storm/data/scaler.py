@@ -118,11 +118,8 @@ class StandardScaler(BaseScaler):
     def fit_transform(self, df: DataFrame | np.ndarray) -> DataFrame | np.ndarray:
         values, columns = self._convert(df)
 
-        mean = values.mean(axis=0, keepdims=True)
-        std = values.std(axis=0, keepdims=True)
-
-        mean = mean.repeat(repeats=len(values), axis=0)
-        std = std.repeat(repeats=len(values), axis=0)
+        mean = values.mean(axis=0)
+        std = values.std(axis=0)
 
         normed_values = 1.0 * (values - mean) / (std + EPS)
 

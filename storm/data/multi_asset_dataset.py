@@ -31,11 +31,13 @@ class MultiAssetDataset(Dataset):
                  scaler_cfg: Dict[str, Any] = None,
                  scaler_file: str = None,
                  scaled_data_file: str = None,
+                 fit_scaler: bool = True,
                  history_timestamps: int = 64,
                  future_timestamps: int = 32,
                  start_timestamp: str = None,
                  end_timestamp: str = None,
                  timestamp_format: str = "%Y-%m-%d",
+                 timestamp_alignment: str = "intersection",
                  exp_path: str = None,
                  **kwargs
                  ):
@@ -59,6 +61,7 @@ class MultiAssetDataset(Dataset):
         exp_path = assemble_project_path(exp_path)
         self.scaler_path = os.path.join(exp_path, scaler_file)
         self.scaled_data_path = os.path.join(exp_path, scaled_data_file)
+        self.fit_scaler = fit_scaler
 
         self.history_timestamps = history_timestamps
         self.future_timestamps = future_timestamps
@@ -67,6 +70,7 @@ class MultiAssetDataset(Dataset):
         self.end_timestamp = end_timestamp
 
         self.timestamp_format = timestamp_format
+        self.timestamp_alignment = timestamp_alignment
 
         self.scaler_cfg = scaler_cfg
         if os.path.exists(self.scaler_path):
@@ -86,10 +90,15 @@ class MultiAssetDataset(Dataset):
             self.prices_std = scaled_data["prices_std"]
             self.data_info = scaled_data["data_info"]
         else:
+            if self.if_norm and self.scalers is None and not self.fit_scaler:
+                raise FileNotFoundError(
+                    f"Scaler file not found for transform-only dataset: {self.scaler_path}"
+                )
             self.assets = self._init_assets()
             self.assets_df = self._load_assets_df()
             self.features, self.labels, self.prices, self.original_prices, self.scalers, self.prices_mean, self.prices_std = self._init_features()
-            save_joblib(self.scalers, self.scaler_path)
+            if self.if_norm and self.fit_scaler:
+                save_joblib(self.scalers, self.scaler_path)
             self.data_info = self._init_data_info()
 
             scaled_data = {
@@ -139,6 +148,35 @@ class MultiAssetDataset(Dataset):
                 pass
 
             assets_df[asset] = asset_df
+
+        if self.timestamp_alignment == "intersection":
+            common_index = None
+            for asset in self.assets:
+                asset_index = assets_df[asset].index
+                common_index = asset_index if common_index is None else common_index.intersection(asset_index)
+            common_index = common_index.sort_values()
+            for asset in self.assets:
+                assets_df[asset] = assets_df[asset].loc[common_index].copy()
+        elif self.timestamp_alignment == "check":
+            base_asset = self.assets[0]
+            base_index = assets_df[base_asset].index
+            for asset in self.assets[1:]:
+                asset_index = assets_df[asset].index
+                if not asset_index.equals(base_index):
+                    missing = base_index.difference(asset_index)
+                    extra = asset_index.difference(base_index)
+                    raise ValueError(
+                        f"Timestamp misalignment detected between {base_asset} and {asset}. "
+                        f"missing={len(missing)}, extra={len(extra)}"
+                    )
+        elif self.timestamp_alignment == "none":
+            pass
+        else:
+            raise ValueError(
+                f"Unsupported timestamp_alignment={self.timestamp_alignment}. "
+                "Expected one of: intersection, check, none"
+            )
+
         return assets_df
 
     def _init_features(self):
@@ -160,6 +198,11 @@ class MultiAssetDataset(Dataset):
 
             if self.if_norm:
                 if self.scalers is None or asset not in self.scalers:
+                    if not self.fit_scaler:
+                        raise FileNotFoundError(
+                            f"Scaler for asset '{asset}' not found at {self.scaler_path}. "
+                            "This dataset is configured to reuse an existing scaler without fitting a new one."
+                        )
                     scaler = SCALER.build(self.scaler_cfg)
 
                     if self.if_norm_temporal:

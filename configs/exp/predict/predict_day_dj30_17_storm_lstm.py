@@ -11,6 +11,7 @@ seed = 1337
 if_remove = False
 
 storm_data_config = "configs/exp/pretrain/pretrain_day_dj30_17_dynamic_single_vqvae_time_series.py"
+# Reuses the main STORM data config, which now uses StandardScaler(train fit -> valid/test transform).
 
 label_column = "ret1"
 history_timestamps = 64

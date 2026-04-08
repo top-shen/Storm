@@ -279,7 +279,7 @@ dataset = dict(
     if_norm=if_norm,
     if_norm_temporal=if_norm_temporal,
     if_use_future=if_use_future,
-    scaler_cfg = dict(type="WindowedScaler"),
+    scaler_cfg = dict(type="StandardScaler"),
     scaler_file="scalers.joblib",
     scaled_data_file="scaled_data.joblib",
     history_timestamps=history_timestamps,
@@ -294,24 +294,27 @@ dataset = dict(
 train_dataset = dataset.copy()
 train_dataset.update(
     # start_timestamp="1994-03-01",
-    scaler_file="train_scalers.joblib",
-    scaled_data_file="train_scaled_data.joblib",
+    scaler_file="train_standard_scalers.joblib",
+    scaled_data_file="train_standard_scaled_data.joblib",
+    fit_scaler=True,
     start_timestamp="2008-04-01",
     end_timestamp="2021-04-01",
 )
 
 valid_dataset = dataset.copy()
 valid_dataset.update(
-    scaler_file="valid_scalers.joblib",
-    scaled_data_file="valid_scaled_data.joblib",
+    scaler_file="train_standard_scalers.joblib",
+    scaled_data_file="valid_standard_scaled_data_train_scaler.joblib",
+    fit_scaler=False,
     start_timestamp="2021-04-01",
     end_timestamp="2024-04-01",
 )
 
 test_dataset = dataset.copy()
 test_dataset.update(
-    scaler_file="test_scalers.joblib",
-    scaled_data_file="test_scaled_data.joblib",
+    scaler_file="train_standard_scalers.joblib",
+    scaled_data_file="test_standard_scaled_data_train_scaler.joblib",
+    fit_scaler=False,
     start_timestamp="2021-04-01",
     end_timestamp="2024-04-01",
 )

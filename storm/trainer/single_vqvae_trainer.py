@@ -11,7 +11,7 @@ from storm.registry import DOWNSTREAM
 from storm.utils import check_data
 from storm.utils import SmoothedValue
 from storm.utils import MetricLogger
-from storm.metrics import MSE, RankICIR, RankIC
+from storm.metrics import MSE, RankICIR, RankIC, RankICSeries
 from storm.models import get_patch_info, patchify
 
 @TRAINER.register_module(force=True)
@@ -437,15 +437,16 @@ class SingleVQVAETrainer():
                     "mse": mse,
                 })
 
-            pred_label = pred_label.detach().cpu().numpy()
-            labels = labels.detach().cpu().numpy()
-            rankic = RankIC(pred_label, labels)
+            pred_label = pred_label.detach()
+            labels = labels.detach()
+            batch_rankics = RankICSeries(pred_label, labels)
+            rankic = float(batch_rankics.mean().item()) if batch_rankics.numel() > 0 else 0.0
             records.update({
                 "rankic": rankic,
             })
-            rankics.append(rankic)
+            rankics.extend(batch_rankics.cpu().tolist())
 
-            rankicir = RankICIR(rankics)
+            rankicir = float(RankICIR(torch.tensor(rankics, dtype=torch.float32)).item()) if len(rankics) > 1 else 0.0
             records.update({
                 "rankicir": rankicir,
             })
@@ -626,18 +627,18 @@ class SingleVQVAETrainer():
 
             records.setdefault("MSE", []).append(mse)
 
-            pred_label = pred_label.detach().cpu().numpy()
-            labels = labels.detach().cpu().numpy()
-            rankic = RankIC(pred_label, labels)
-            records.setdefault("RANKIC", []).append(rankic)
+            pred_label = pred_label.detach()
+            labels = labels.detach()
+            batch_rankics = RankICSeries(pred_label, labels)
+            records.setdefault("RANKIC", []).extend(batch_rankics.cpu().tolist())
 
-            pred_labels.append(pred_label)
-            true_labels.append(labels)
+            pred_labels.append(pred_label.cpu().numpy())
+            true_labels.append(labels.cpu().numpy())
 
         metrics = dict()
         for key, values in records.items():
             metrics[key] = np.mean(values)
-        metrics["RANKICIR"] = RankICIR(records["RANKIC"])
+        metrics["RANKICIR"] = float(RankICIR(torch.tensor(records["RANKIC"], dtype=torch.float32)).item()) if len(records["RANKIC"]) > 1 else 0.0
 
         pred_labels = np.concatenate(pred_labels, axis=0)
         true_labels = np.concatenate(true_labels, axis=0)

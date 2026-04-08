@@ -11,7 +11,7 @@ from storm.registry import DOWNSTREAM
 from storm.utils import check_data
 from storm.utils import SmoothedValue
 from storm.utils import MetricLogger
-from storm.metrics import MSE, RankICIR, RankIC
+from storm.metrics import MSE, RankICIR, RankIC, RankICSeries
 from storm.models import get_patch_info, patchify
 from storm.utils import convert_int_to_timestamp
 from storm.utils import save_joblib
@@ -507,16 +507,17 @@ class DualVQVAETrainer():
                         "ts_mse": self.accelerator.gather(ts_mse).mean().item(),
                     })
 
-                pred_label = self.accelerator.gather(pred_label.detach()).cpu().numpy()
-                labels = self.accelerator.gather(labels.detach()).cpu().numpy()
+                pred_label = self.accelerator.gather(pred_label.detach())
+                labels = self.accelerator.gather(labels.detach())
 
-                rankic = RankIC(pred_label, labels)
+                batch_rankics = RankICSeries(pred_label, labels)
+                rankic = float(batch_rankics.mean().item()) if batch_rankics.numel() > 0 else 0.0
                 records = self.update_records_value(records, {
                     "rankic": rankic,
                 })
-                rankics.append(rankic)
+                rankics.extend(batch_rankics.cpu().tolist())
 
-                rankicir = RankICIR(rankics)
+                rankicir = float(RankICIR(torch.tensor(rankics, dtype=torch.float32)).item()) if len(rankics) > 1 else 0.0
                 records = self.update_records_value(records, {
                     "rankicir": rankicir,
                 })
@@ -711,9 +712,9 @@ class DualVQVAETrainer():
                 labels = self.accelerator.gather(labels.detach()).cpu().numpy()
                 end_timestamp = self.accelerator.gather(end_timestamp.detach()).cpu().numpy()
 
-                rankic = RankIC(pred_label, labels)
+                batch_rankics = RankICSeries(pred_label, labels)
                 records = self.update_records_list(records, {
-                    "RANKIC": rankic,
+                    "RANKIC": batch_rankics.detach().cpu().tolist(),
                 })
 
                 pred_label = self.accelerator.gather(pred_label.detach()).cpu().numpy()
@@ -731,7 +732,7 @@ class DualVQVAETrainer():
         for key, values in records.items():
             metrics[key] = np.mean(values)
         if self.is_main_process:
-            metrics["RANKICIR"] = RankICIR(records["RANKIC"])
+            metrics["RANKICIR"] = float(RankICIR(torch.tensor(records["RANKIC"], dtype=torch.float32)).item()) if len(records["RANKIC"]) > 1 else 0.0
 
         # Process extra records
         if self.is_main_process:

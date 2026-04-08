@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Iterable, List
 
+import numpy as np
 import pandas as pd
 
 from storm.utils import assemble_project_path
@@ -192,6 +193,39 @@ def apply_qlib_like_processors(
     return processed
 
 
+def _safe_div_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.divide(a, b, out=np.zeros_like(a, dtype=np.float64), where=b != 0)
+
+
+def _rank_ic_single_np(pred_row: np.ndarray, futr_row: np.ndarray) -> float:
+    pred_row = np.asarray(pred_row, dtype=np.float64)
+    futr_row = np.asarray(futr_row, dtype=np.float64)
+
+    if pred_row.size <= 1 or futr_row.size <= 1:
+        return 0.0
+    if np.unique(pred_row).size < 2 or np.unique(futr_row).size < 2:
+        return 0.0
+
+    pred_rank = pd.Series(pred_row).rank(method="average").to_numpy(dtype=np.float64)
+    futr_rank = pd.Series(futr_row).rank(method="average").to_numpy(dtype=np.float64)
+
+    pred_centered = pred_rank - pred_rank.mean()
+    futr_centered = futr_rank - futr_rank.mean()
+
+    pred_std = pred_centered.std(ddof=0)
+    futr_std = futr_centered.std(ddof=0)
+    if pred_std <= 0 or futr_std <= 0:
+        return 0.0
+
+    covariance = np.mean(pred_centered * futr_centered)
+    return float(covariance / (pred_std * futr_std))
+
+
+def _calc_rankic_np(preds: List[np.ndarray], futrs: List[np.ndarray]) -> np.ndarray:
+    values = [_rank_ic_single_np(pred_row.reshape(-1), futr_row.reshape(-1)) for pred_row, futr_row in zip(preds, futrs)]
+    return np.asarray(values, dtype=np.float64)
+
+
 def calc_prediction_metrics(
     label_df: pd.DataFrame,
     pred_series: pd.Series,
@@ -206,18 +240,19 @@ def calc_prediction_metrics(
     y_pred = merged[("prediction", pred_name)].astype(float)
     mse = float(((y_true - y_pred) ** 2).mean())
 
-    rankics = []
+    pred_groups = []
+    true_groups = []
     for _, group in merged.groupby(level=0):
         if len(group) < 2:
             continue
-        rankic = group[("label", label_column)].corr(group[("prediction", pred_name)], method="spearman")
-        if pd.notna(rankic):
-            rankics.append(float(rankic))
+        pred_groups.append(group[("prediction", pred_name)].to_numpy(dtype=np.float64)[None, :])
+        true_groups.append(group[("label", label_column)].to_numpy(dtype=np.float64)[None, :])
 
-    if rankics:
-        rankic = float(pd.Series(rankics).mean())
-        rankic_std = float(pd.Series(rankics).std(ddof=0))
-        rankicir = float(rankic / rankic_std) if len(rankics) > 1 and rankic_std > 0 else 0.0
+    if pred_groups:
+        rankic_values = _calc_rankic_np(pred_groups, true_groups)
+        rankic = float(rankic_values.mean())
+        rankic_std = float(rankic_values.std())
+        rankicir = float(rankic / rankic_std) if rankic_values.size > 1 and rankic_std > 0 else 0.0
     else:
         rankic = 0.0
         rankicir = 0.0

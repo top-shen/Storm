@@ -659,7 +659,8 @@ class DynamicSingleVQVAETrainer():
             metrics["RANKIC"] = 0.0
 
         if rankic_values.size > 1:
-            metrics["RANKICIR"] = float(np.mean(rankic_values) / (np.std(rankic_values) + 1e-6))
+            rankic_std = float(np.std(rankic_values))
+            metrics["RANKICIR"] = float(np.mean(rankic_values) / rankic_std) if rankic_std > 0 else 0.0
         else:
             metrics["RANKICIR"] = 0.0
 

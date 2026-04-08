@@ -12,7 +12,7 @@ from storm.registry import DOWNSTREAM
 from storm.utils import check_data
 from storm.utils import SmoothedValue
 from storm.utils import MetricLogger
-from storm.metrics import MSE, RankICIR, RankIC
+from storm.metrics import MSE, RankICIR, RankIC, RankICSeries
 from storm.models import get_patch_info, patchify
 from storm.utils import convert_int_to_timestamp
 from storm.utils import save_joblib
@@ -704,12 +704,11 @@ class DynamicDualVQVAETrainer():
             labels = labels.detach()
             end_timestamp = end_timestamp.detach()
 
-            rankic = RankIC(pred_label, labels)
-            rankics.append(rankic)
+            batch_rankics = RankICSeries(pred_label, labels)
+            rankics.extend(batch_rankics.cpu().tolist())
+            batch_rankic = float(batch_rankics.mean().item()) if batch_rankics.numel() > 0 else 0.0
 
-            rankicir = RankICIR(rankics)
-
-            records.update(data={"RANKIC": rankic, "RANKICIR": rankicir},
+            records.update(data={"RANKIC": batch_rankic},
                            extra_info={"end_timestamp": end_timestamp,
                                        "pred_label": pred_label, "true_label": labels})
 
@@ -724,7 +723,13 @@ class DynamicDualVQVAETrainer():
         metrics = dict()
         for key, values in combiner.items():
             metrics[key] = np.mean(values)
-        metrics["RANKICIR"] = gathered_item["RANKICIR"]
+        rankic_values = np.asarray(rankics, dtype=np.float64)
+        metrics["RANKIC"] = float(np.mean(rankic_values)) if rankic_values.size > 0 else 0.0
+        if rankic_values.size > 1:
+            rankic_std = float(np.std(rankic_values))
+            metrics["RANKICIR"] = float(np.mean(rankic_values) / rankic_std) if rankic_std > 0 else 0.0
+        else:
+            metrics["RANKICIR"] = 0.0
 
         # Process extra records
         if self.is_main_process:

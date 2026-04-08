@@ -219,8 +219,8 @@ class MultiAssetDataset(Dataset):
                 scalers[asset] = scaler
 
                 if len(scaler.mean.shape) == 1 and len(scaler.std.shape) == 1:
-                    prices_mean[asset] = scaler.mean[None, 1].repeat(asset_df.shape[0], axis=0)[..., price_indices]
-                    prices_std[asset] = scaler.std[None, 1].repeat(asset_df.shape[0], axis=0)[..., price_indices]
+                    prices_mean[asset] = np.repeat(scaler.mean[None, :], asset_df.shape[0], axis=0)[..., price_indices]
+                    prices_std[asset] = np.repeat(scaler.std[None, :], asset_df.shape[0], axis=0)[..., price_indices]
                 else:
                     prices_mean[asset] = scaler.mean[..., price_indices]
                     prices_std[asset] = scaler.std[..., price_indices]

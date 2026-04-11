@@ -357,10 +357,9 @@ class VQVAETrainer():
                 "weighted_orthogonal_reg_loss": self.accelerator.gather(weighted_orthogonal_reg_loss).mean().item()
             })
 
-            loss += (weighted_quantized_loss +
-                     weighted_commit_loss +
-                     weighted_codebook_diversity_loss +
-                     weighted_orthogonal_reg_loss)
+            # `weighted_quantized_loss` already contains the full quantizer
+            # objective. The breakdown terms are tracked for logging only.
+            loss += weighted_quantized_loss
 
             if self.vae_loss_fn:
                 loss_dict = self.vae_loss_fn(sample=patched_pred_prices,

@@ -1,5 +1,5 @@
 workdir = "workdir"
-tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_200e_h8_cb512"
+tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_200e_h8_cb256"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"
@@ -53,7 +53,7 @@ encoder_depth = 4
 encoder_num_heads = 4
 encoder_mlp_ratio = 4.0
 
-codebook_size =  512
+codebook_size =  256
 codebook_dim = encoder_embed_dim
 
 dit_embed_dim = 256

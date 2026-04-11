@@ -20,10 +20,12 @@ class DynamicSingleVQVAE(nn.Module):
                  embed_config: Dict = None,  # cross-sectional embedding config
                  config: Dict = None,  # cross-sectional config
                  asset_num: int = 29,  # asset number
+                 use_quantized_only_for_factors: bool = False,
                  ):
         super(DynamicSingleVQVAE, self).__init__()
 
         self.asset_num = asset_num
+        self.use_quantized_only_for_factors = use_quantized_only_for_factors
 
         self.encoder_config = config.get("encoder_config", {})  # cross-sectional factor encoder config
         self.quantizer_config = config.get("quantizer_config", {})  # cross-sectional factor quantizer config
@@ -37,7 +39,7 @@ class DynamicSingleVQVAE(nn.Module):
         self.patch_size = self.embed_layer.patch_size
         self.output_dim = self.decoder.output_dim
 
-        latent_dim = self.encoder.latent_dim * 2
+        latent_dim = self.encoder.latent_dim if self.use_quantized_only_for_factors else self.encoder.latent_dim * 2
         factor_num = self.encoder.n_num
         # to post distribution encode latent
         self.to_pd_encode_latent = Mlp(
@@ -213,7 +215,10 @@ class DynamicSingleVQVAE(nn.Module):
         weighted_codebook_diversity_loss = encoder_output["weighted_codebook_diversity_loss"]
         weighted_orthogonal_reg_loss = encoder_output["weighted_orthogonal_reg_loss"]
 
-        factors = torch.concat([enc, quantized], dim=-1)
+        if self.use_quantized_only_for_factors:
+            factors = quantized
+        else:
+            factors = torch.concat([enc, quantized], dim=-1)
 
         posterior = self.encode_post_distribution(factors, label)
         mu_post, sigma_post = posterior.mean, posterior.std

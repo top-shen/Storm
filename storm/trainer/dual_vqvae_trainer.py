@@ -379,11 +379,11 @@ class DualVQVAETrainer():
             weighted_codebook_diversity_loss = output["weighted_codebook_diversity_loss"]
             weighted_orthogonal_reg_loss = output["weighted_orthogonal_reg_loss"]
 
+            # `weighted_quantized_loss` already includes commitment/diversity/
+            # orthogonal regularization from the quantizer. Only add the
+            # separate clip term on top here.
             loss += (weighted_quantized_loss +
-                     weighted_clip_loss +
-                     weighted_commit_loss +
-                     weighted_codebook_diversity_loss +
-                     weighted_orthogonal_reg_loss)
+                     weighted_clip_loss)
 
             records = self.update_records_value(records, {
                 "weighted_quantized_loss": self.accelerator.gather(weighted_quantized_loss).mean().item(),

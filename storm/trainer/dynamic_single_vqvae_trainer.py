@@ -363,10 +363,10 @@ class DynamicSingleVQVAETrainer():
             weighted_codebook_diversity_loss = output["weighted_codebook_diversity_loss"]
             weighted_orthogonal_reg_loss = output["weighted_orthogonal_reg_loss"]
 
-            loss += (weighted_quantized_loss +
-                     weighted_commit_loss +
-                     weighted_codebook_diversity_loss +
-                     weighted_orthogonal_reg_loss)
+            # `weighted_quantized_loss` already contains the full quantizer
+            # objective. The breakdown terms are logged separately and should
+            # not be added again here.
+            loss += weighted_quantized_loss
 
             records.update({
                 "weighted_quantized_loss": weighted_quantized_loss,

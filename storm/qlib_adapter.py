@@ -24,6 +24,7 @@ def _load_asset_frames(
     label_column: str,
     start_time: str = None,
     end_time: str = None,
+    timestamp_alignment: str = "intersection",
 ):
     data_path = assemble_project_path(data_path)
     assets = _load_assets(assets_path)
@@ -43,6 +44,35 @@ def _load_asset_frames(
 
         use_columns = feature_columns + [label_column]
         frames[asset] = df[use_columns].copy()
+
+    if timestamp_alignment == "intersection":
+        common_index = None
+        for asset in assets:
+            asset_index = frames[asset].index
+            common_index = asset_index if common_index is None else common_index.intersection(asset_index)
+        common_index = common_index.sort_values()
+        for asset in assets:
+            frames[asset] = frames[asset].loc[common_index].copy()
+    elif timestamp_alignment == "check":
+        base_asset = assets[0]
+        base_index = frames[base_asset].index
+        for asset in assets[1:]:
+            asset_index = frames[asset].index
+            if not asset_index.equals(base_index):
+                missing = base_index.difference(asset_index)
+                extra = asset_index.difference(base_index)
+                raise ValueError(
+                    f"Timestamp misalignment detected between {base_asset} and {asset}. "
+                    f"missing={len(missing)}, extra={len(extra)}"
+                )
+    elif timestamp_alignment == "none":
+        pass
+    else:
+        raise ValueError(
+            f"Unsupported timestamp_alignment={timestamp_alignment}. "
+            "Expected one of: intersection, check, none"
+        )
+
     return assets, frames, feature_columns
 
 

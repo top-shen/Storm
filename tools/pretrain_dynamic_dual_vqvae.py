@@ -3,6 +3,7 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 import argparse
+import subprocess
 import numpy as np
 from mmengine import DictAction
 from copy import deepcopy
@@ -37,6 +38,29 @@ from storm.utils import to_torch_dtype
 from storm.utils import get_model_numel
 from storm.utils import requires_grad
 from storm.utils import record_model_param_shape
+
+def _auto_plot_log(log_path: str, logger, is_main_process: bool):
+    if not is_main_process:
+        return
+
+    if not log_path or not os.path.exists(log_path):
+        return
+
+    plot_script = os.path.join(current, "plot_train_log.py")
+    if not os.path.exists(plot_script):
+        logger.warning(f"| Plot script not found: {plot_script}")
+        return
+
+    try:
+        subprocess.run(
+            [sys.executable, plot_script, "--log", log_path],
+            cwd=root,
+            check=True,
+        )
+        logger.info(f"| Auto-generated plots for: {log_path}")
+    except Exception as exc:
+        logger.warning(f"| Failed to auto-generate plots for {log_path}: {exc}")
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser(description="Train script for storm")
@@ -305,11 +329,13 @@ def main(args):
     logger.info(f"| Train: {args.train}")
     if args.train:
         trainer.train()
+        _auto_plot_log(os.path.join(config.exp_path, "train_log.txt"), logger, accelerator.is_local_main_process)
 
     # 17. start testing
     logger.info(f"| Test: {args.test}")
     if args.test:
         trainer.test(checkpoint_path = args.checkpoint_path)
+        _auto_plot_log(os.path.join(config.exp_path, "test_log.txt"), logger, accelerator.is_local_main_process)
 
     # 18. start state
     logger.info(f"| State: {trainer.state}")

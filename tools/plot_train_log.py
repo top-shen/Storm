@@ -90,16 +90,15 @@ def main() -> None:
     outdir = Path(args.outdir).expanduser().resolve() if args.outdir else log_path.parent / "plots"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    log_prefix = log_path.stem.replace("_log", "")
     if len(rows) == 1:
         print(f"Warning: only 1 JSON row found in {log_path.name}; this is usually expected for test/state logs, not full training curves.")
 
     all_numeric = _numeric_keys(rows)
 
     default_groups = {
-        f"{log_prefix}_loss_overview.png": ["train_loss", "valid_loss", "loss", "valid_MSE", "valid_mse", "train_mse"],
-        f"{log_prefix}_rank_metrics.png": ["valid_RANKIC", "valid_RANKICIR", "train_RANKIC", "train_RANKICIR"],
-        f"{log_prefix}_vq_losses_train.png": [
+        "loss_overview.png": ["train_loss", "valid_loss", "loss", "valid_MSE", "valid_mse", "train_mse"],
+        "rank_metrics.png": ["valid_RANKIC", "valid_RANKICIR", "train_RANKIC", "train_RANKICIR"],
+        "vq_losses_train.png": [
             "train_weighted_quantized_loss",
             "train_weighted_commit_loss",
             "train_weighted_codebook_diversity_loss",
@@ -109,7 +108,7 @@ def main() -> None:
             "train_weighted_kl_loss",
             "train_weighted_cont_loss",
         ],
-        f"{log_prefix}_vq_losses_valid.png": [
+        "vq_losses_valid.png": [
             "valid_weighted_quantized_loss",
             "valid_weighted_commit_loss",
             "valid_weighted_codebook_diversity_loss",
@@ -126,7 +125,7 @@ def main() -> None:
 
     default_keys = {key for keys in default_groups.values() for key in keys}
     extra_keys = [key for key in all_numeric if key not in default_keys]
-    _plot_group(rows, args.x_key, extra_keys, "extra metrics", outdir / f"{log_prefix}_extra_metrics.png")
+    _plot_group(rows, args.x_key, extra_keys, "extra metrics", outdir / "extra_metrics.png")
 
     print(f"Saved plots to: {outdir}")
     for path in sorted(outdir.glob("*.png")):

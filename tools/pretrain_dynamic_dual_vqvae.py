@@ -337,19 +337,13 @@ def main(args):
             os.path.join(config.exp_path, "train_log.txt"),
             logger,
             accelerator.is_local_main_process,
-            os.path.join(config.exp_path, "plots", "train"),
+            os.path.join(config.exp_path, "plots"),
         )
 
     # 17. start testing
     logger.info(f"| Test: {args.test}")
     if args.test:
         trainer.test(checkpoint_path = args.checkpoint_path)
-        _auto_plot_log(
-            os.path.join(config.exp_path, "test_log.txt"),
-            logger,
-            accelerator.is_local_main_process,
-            os.path.join(config.exp_path, "plots", "test"),
-        )
 
     # 18. start state
     logger.info(f"| State: {trainer.state}")

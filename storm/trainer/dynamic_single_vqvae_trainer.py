@@ -18,6 +18,7 @@ from storm.utils import convert_int_to_timestamp
 from storm.utils import save_joblib
 from storm.utils import save_json
 from storm.utils import Records
+from storm.qlib_adapter import build_prediction_payload
 
 @TRAINER.register_module(force=True)
 class DynamicSingleVQVAETrainer():
@@ -546,6 +547,7 @@ class DynamicSingleVQVAETrainer():
         pred_labels_all = []
         true_labels_all = []
         end_timestamps_all = []
+        assets_all = []
         for data_iter_step, batch in enumerate(metric_logger.log_every(dataloader,
                                                                        self.logger,
                                                                        self.print_freq,
@@ -648,6 +650,7 @@ class DynamicSingleVQVAETrainer():
             end_timestamps_all.append(end_timestamp.cpu().numpy())
             pred_labels_all.append(pred_label.cpu().numpy())
             true_labels_all.append(labels.cpu().numpy())
+            assets_all.extend(batch["asset"])
 
         metrics = dict()
         metrics["MSE"] = float(np.mean(mses)) if len(mses) > 0 else 0.0
@@ -675,6 +678,7 @@ class DynamicSingleVQVAETrainer():
             end_timestamps = end_timestamps[indices]
             pred_labels = pred_labels[indices]
             true_labels = true_labels[indices]
+            assets_all = [assets_all[idx] for idx in indices.tolist()]
 
             downstream_metrics = self.downstream(pred_labels=pred_labels,
                                                  true_labels=true_labels)
@@ -689,6 +693,22 @@ class DynamicSingleVQVAETrainer():
                 "MDD%": downstream_metrics["MDD%"],
                 "VOL": downstream_metrics["VOL"],
             })
+
+            if save_predictions:
+                row_timestamps = []
+                row_assets = []
+                row_preds = []
+                row_trues = []
+                for end_timestamp, batch_assets, pred_row, true_row in zip(end_timestamps, assets_all, pred_labels, true_labels):
+                    date_str = convert_int_to_timestamp(int(end_timestamp)).strftime("%Y-%m-%d")
+                    for asset, pred_value, true_value in zip(batch_assets, pred_row, true_row):
+                        row_timestamps.append(date_str)
+                        row_assets.append(asset)
+                        row_preds.append(float(pred_value))
+                        row_trues.append(float(true_value))
+
+                payload = build_prediction_payload(row_timestamps, row_assets, row_preds, row_trues)
+                save_joblib(payload, os.path.join(self.exp_path, f"{mode}_predictions.joblib"))
 
         # Round
         for key, value in metrics.items():
@@ -916,7 +936,8 @@ class DynamicSingleVQVAETrainer():
                                    mode="test",
                                    if_use_writer=False,
                                    if_use_wandb=False,
-                                   if_plot=False)
+                                   if_plot=False,
+                                   save_predictions=True)
 
         log_stats.update({f"train_{k}": v for k, v in train_stats.items()})
         log_stats.update({f"valid_{k}": v for k, v in valid_stats.items()})

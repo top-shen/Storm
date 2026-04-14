@@ -292,3 +292,85 @@ def calc_prediction_metrics(
         "RANKIC": round(rankic, 6),
         "RANKICIR": round(rankicir, 6),
     }
+
+
+def _direction_label(value: float) -> str:
+    if value > 0:
+        return "up"
+    if value < 0:
+        return "down"
+    return "flat"
+
+
+def build_prediction_payload(
+    end_timestamps: Iterable,
+    assets: Iterable[str],
+    pred_values: Iterable[float],
+    true_values: Iterable[float],
+):
+    end_timestamps = [str(ts) for ts in end_timestamps]
+    assets = [str(asset) for asset in assets]
+    pred_values = [float(v) for v in pred_values]
+    true_values = [float(v) for v in true_values]
+
+    pred_direction = [_direction_label(v) for v in pred_values]
+    true_direction = [_direction_label(v) for v in true_values]
+
+    payload = {
+        "end_timestamp": end_timestamps,
+        "asset": assets,
+        "pred_label": pred_values,
+        "true_label": true_values,
+        "pred_direction": pred_direction,
+        "true_direction": true_direction,
+    }
+
+    rows = pd.DataFrame(
+        {
+            "end_timestamp": end_timestamps,
+            "asset": assets,
+            "pred_label": pred_values,
+            "true_label": true_values,
+            "pred_direction": pred_direction,
+            "true_direction": true_direction,
+        }
+    )
+
+    rankings_by_date = []
+    for date, group in rows.groupby("end_timestamp", sort=True):
+        ordered = group.sort_values(["pred_label", "asset"], ascending=[False, True]).reset_index(drop=True)
+        ranking = []
+        for rank, item in enumerate(ordered.itertuples(index=False), start=1):
+            ranking.append(
+                {
+                    "rank": rank,
+                    "asset": item.asset,
+                    "pred_label": float(item.pred_label),
+                    "true_label": float(item.true_label),
+                    "pred_direction": item.pred_direction,
+                    "true_direction": item.true_direction,
+                }
+            )
+        rankings_by_date.append({"end_timestamp": date, "ranking": ranking})
+
+    payload["rankings_by_date"] = rankings_by_date
+    return payload
+
+
+def build_prediction_payload_from_frame(
+    label_df: pd.DataFrame,
+    pred_series: pd.Series,
+    label_column: str = "ret1",
+):
+    pred_name = pred_series.name if pred_series.name is not None else "score"
+    pred_frame = pred_series.to_frame(name=pred_name)
+    pred_frame.columns = pd.MultiIndex.from_tuples([("prediction", pred_name)])
+    merged = pd.concat([label_df, pred_frame], axis=1, join="inner")
+
+    payload = build_prediction_payload(
+        [idx[0].strftime("%Y-%m-%d") for idx in merged.index],
+        [idx[1] for idx in merged.index],
+        merged[("prediction", pred_name)].to_numpy(),
+        merged[("label", label_column)].to_numpy(),
+    )
+    return merged, payload

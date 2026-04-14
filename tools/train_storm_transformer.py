@@ -18,7 +18,7 @@ sys.path.append(root)
 from storm.config import build_config
 from storm.log import logger
 from storm.models.storm_transformer import StormTransformer
-from storm.qlib_adapter import calc_prediction_metrics
+from storm.qlib_adapter import calc_prediction_metrics, build_prediction_payload
 from storm.registry import COLLATE_FN, DATASET
 from storm.utils import assemble_project_path, convert_int_to_timestamp, get_model_numel, save_joblib
 

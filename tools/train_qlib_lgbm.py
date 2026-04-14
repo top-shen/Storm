@@ -13,7 +13,7 @@ from mmengine import DictAction
 
 from storm.config import build_config
 from storm.log import logger
-from storm.qlib_adapter import build_windowed_qlib_dataframe, calc_prediction_metrics
+from storm.qlib_adapter import build_windowed_qlib_dataframe, calc_prediction_metrics, build_prediction_payload_from_frame
 from storm.utils import assemble_project_path, save_joblib, load_joblib
 
 
@@ -71,16 +71,8 @@ def _segment_label_frame(dataset, segment):
     return dataset.prepare(segment, col_set=["label"], data_key=DataHandlerLP.DK_L)
 
 
-def _save_predictions(exp_path, split, pred_series, label_df):
-    pred_frame = pred_series.to_frame(name="score")
-    pred_frame.columns = pd.MultiIndex.from_tuples([("prediction", "score")])
-    merged = pd.concat([label_df, pred_frame], axis=1, join="inner")
-    payload = {
-        "end_timestamp": [idx[0].strftime("%Y-%m-%d") for idx in merged.index],
-        "asset": [idx[1] for idx in merged.index],
-        "pred_label": merged[("prediction", "score")].to_numpy(),
-        "true_label": merged[("label", "ret1")].to_numpy(),
-    }
+def _save_predictions(exp_path, split, pred_series, label_df, label_column="ret1"):
+    _, payload = build_prediction_payload_from_frame(label_df, pred_series, label_column=label_column)
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))
 
 
@@ -93,7 +85,7 @@ def _evaluate(model, dataset, exp_path):
             pred = pred.iloc[:, 0]
         pred.name = "score"
         metrics = calc_prediction_metrics(label_df, pred, label_column="ret1")
-        _save_predictions(exp_path, split, pred, label_df)
+        _save_predictions(exp_path, split, pred, label_df, label_column=config.label_column)
         stats.update({f"{split}_{k}": v for k, v in metrics.items()})
     return stats
 

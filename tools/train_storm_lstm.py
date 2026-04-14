@@ -18,7 +18,7 @@ sys.path.append(root)
 from storm.config import build_config
 from storm.log import logger
 from storm.models.storm_lstm import StormLSTM
-from storm.qlib_adapter import calc_prediction_metrics
+from storm.qlib_adapter import calc_prediction_metrics, build_prediction_payload
 from storm.registry import COLLATE_FN, DATASET
 from storm.utils import assemble_project_path, convert_int_to_timestamp, get_model_numel, save_joblib
 
@@ -231,7 +231,13 @@ def _evaluate(model, dataloader, device, label_column, save_path=None):
     metrics["MSE"] = round(total_squared_error / max(total_count, 1), 6)
 
     if save_path is not None:
-        save_joblib(payload, save_path)
+        enriched_payload = build_prediction_payload(
+            payload["end_timestamp"],
+            payload["asset"],
+            payload["pred_label"],
+            payload["true_label"],
+        )
+        save_joblib(enriched_payload, save_path)
 
     return metrics
 

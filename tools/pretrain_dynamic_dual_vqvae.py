@@ -39,7 +39,7 @@ from storm.utils import get_model_numel
 from storm.utils import requires_grad
 from storm.utils import record_model_param_shape
 
-def _auto_plot_log(log_path: str, logger, is_main_process: bool):
+def _auto_plot_log(log_path: str, logger, is_main_process: bool, outdir: str | None = None):
     if not is_main_process:
         return
 
@@ -51,9 +51,13 @@ def _auto_plot_log(log_path: str, logger, is_main_process: bool):
         logger.warning(f"| Plot script not found: {plot_script}")
         return
 
+    command = [sys.executable, plot_script, "--log", log_path]
+    if outdir:
+        command.extend(["--outdir", outdir])
+
     try:
         subprocess.run(
-            [sys.executable, plot_script, "--log", log_path],
+            command,
             cwd=root,
             check=True,
         )
@@ -329,13 +333,23 @@ def main(args):
     logger.info(f"| Train: {args.train}")
     if args.train:
         trainer.train()
-        _auto_plot_log(os.path.join(config.exp_path, "train_log.txt"), logger, accelerator.is_local_main_process)
+        _auto_plot_log(
+            os.path.join(config.exp_path, "train_log.txt"),
+            logger,
+            accelerator.is_local_main_process,
+            os.path.join(config.exp_path, "plots", "train"),
+        )
 
     # 17. start testing
     logger.info(f"| Test: {args.test}")
     if args.test:
         trainer.test(checkpoint_path = args.checkpoint_path)
-        _auto_plot_log(os.path.join(config.exp_path, "test_log.txt"), logger, accelerator.is_local_main_process)
+        _auto_plot_log(
+            os.path.join(config.exp_path, "test_log.txt"),
+            logger,
+            accelerator.is_local_main_process,
+            os.path.join(config.exp_path, "plots", "test"),
+        )
 
     # 18. start state
     logger.info(f"| State: {trainer.state}")

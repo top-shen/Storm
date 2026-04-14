@@ -517,7 +517,8 @@ class DynamicSingleVQVAETrainer():
                  if_use_writer=True,
                  if_use_wandb=True,
                  if_plot=False,
-                 mode="test"
+                 mode="test",
+                 save_predictions: bool = False
                  ):
 
         self.check_batch_info_flag = True if epoch == self.start_epoch else False

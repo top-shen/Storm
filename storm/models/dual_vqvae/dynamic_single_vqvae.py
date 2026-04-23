@@ -135,9 +135,10 @@ class DynamicSingleVQVAE(nn.Module):
 
     @apply_forward_hook
     def decode_post_distribution(self,
-                                 factors: torch.Tensor,
-                                 mu_post: torch.FloatTensor,
-                                 sigma_post: torch.FloatTensor):
+                                  factors: torch.Tensor,
+                                  mu_post: torch.FloatTensor,
+                                  sigma_post: torch.FloatTensor,
+                                  sample_from_distribution: bool = True):
 
         alpha_latent_features = self.to_pd_decode_latent(factors)
         alpha_latent_features = alpha_latent_features.permute(0, 2, 1)
@@ -162,7 +163,10 @@ class DynamicSingleVQVAE(nn.Module):
 
         y_sigma = torch.sqrt(sigma_alpha_pow + sigma_post_pow)
 
-        sample = self.reparameterize(y_mu, y_sigma)
+        if sample_from_distribution:
+            sample = self.reparameterize(y_mu, y_sigma)
+        else:
+            sample = y_mu
         sample = sample.squeeze(-1)
 
         return sample
@@ -230,7 +234,12 @@ class DynamicSingleVQVAE(nn.Module):
 
             decoder_output = self.decode(quantized, id_restore)
         else:
-            pred_label = self.decode_post_distribution(factors, mu_prior, sigma_prior)
+            pred_label = self.decode_post_distribution(
+                factors,
+                mu_prior,
+                sigma_prior,
+                sample_from_distribution=False,
+            )
 
             decoder_output = self.decode(quantized, id_restore)
 

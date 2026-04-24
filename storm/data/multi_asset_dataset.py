@@ -75,6 +75,7 @@ class MultiAssetDataset(Dataset):
 
         self.scaler_cfg = scaler_cfg
         self.cache_meta = self._build_cache_meta()
+        self.scaler_cache_meta = self._build_scaler_cache_meta()
         if os.path.exists(self.scaler_path):
             scaler_payload = load_joblib(self.scaler_path)
             self.scalers = self._load_scaler_cache(scaler_payload)
@@ -114,7 +115,7 @@ class MultiAssetDataset(Dataset):
             self.features, self.labels, self.prices, self.original_prices, self.scalers, self.prices_mean, self.prices_std = self._init_features()
             if self.if_norm and self.fit_scaler:
                 scaler_payload = {
-                    "__cache_meta__": self.cache_meta,
+                    "__cache_meta__": self.scaler_cache_meta,
                     "scalers": self.scalers,
                 }
                 save_joblib(scaler_payload, self.scaler_path)
@@ -154,6 +155,19 @@ class MultiAssetDataset(Dataset):
             "timestamp_alignment": self.timestamp_alignment,
         }
 
+    def _build_scaler_cache_meta(self):
+        return {
+            "cache_version": 2,
+            "data_path": self.data_path,
+            "assets_path": self.assets_path,
+            "fields_name": self.fields_name,
+            "if_norm": self.if_norm,
+            "if_norm_temporal": self.if_norm_temporal,
+            "if_use_temporal": self.if_use_temporal,
+            "scaler_cfg": self.scaler_cfg,
+            "timestamp_alignment": self.timestamp_alignment,
+        }
+
     def _is_compatible_cache(self, cache_payload):
         if not isinstance(cache_payload, dict):
             return False
@@ -187,7 +201,7 @@ class MultiAssetDataset(Dataset):
             )
             return scaler_payload["scalers"]
 
-        if cache_meta != self.cache_meta:
+        if cache_meta != self.scaler_cache_meta:
             message = (
                 f"Scaler cache metadata mismatch at {self.scaler_path}. "
                 "This usually means the dataset/scaler setting changed but the old scaler cache is still being reused."

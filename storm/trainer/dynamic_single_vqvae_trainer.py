@@ -53,6 +53,10 @@ class DynamicSingleVQVAETrainer():
         self.config = config
         self.batch_size = self.config.batch_size
         self.start_epoch = self.config.start_epoch
+        self.resume = getattr(self.config, "resume", True)
+        self.ema_decay = getattr(self.config, "ema_decay", None)
+        self.ema_update_after_step = getattr(self.config, "ema_update_after_step", 0)
+        self.use_ema_for_eval = getattr(self.config, "use_ema_for_eval", False)
         self.num_training_epochs = self.config.num_training_epochs
         self.num_valid_epochs = self.config.num_training_epochs
         self.num_testing_epochs = 1
@@ -121,13 +125,44 @@ class DynamicSingleVQVAETrainer():
         self.plot_path = os.path.join(self.exp_path, "plot")
         os.makedirs(self.plot_path, exist_ok=True)
 
-        self.start_epoch = self.load_checkpoint() + 1
+        if self.resume:
+            self.start_epoch = self.load_checkpoint() + 1
+        else:
+            self.start_epoch = 1
+            self.logger.info("| Resume disabled. Start training from epoch 1 without loading the latest checkpoint.")
 
         self.check_batch_info_flag = True
 
         self.global_train_step = 0
         self.global_valid_step = 0
         self.global_test_step = 0
+
+    def _update_model_ema(self):
+        if self.ema_decay is None or self.ema_decay <= 0.0 or self.ema_decay >= 1.0:
+            return
+        if self.global_train_step < self.ema_update_after_step:
+            return
+
+        model = self.accelerator.unwrap_model(self.model)
+        model_ema = self.accelerator.unwrap_model(self.model_ema)
+
+        with torch.no_grad():
+            model_params = dict(model.named_parameters())
+            ema_params = dict(model_ema.named_parameters())
+            for name, param in model_params.items():
+                if name in ema_params:
+                    ema_params[name].data.mul_(self.ema_decay).add_(param.data, alpha=1.0 - self.ema_decay)
+
+            model_buffers = dict(model.named_buffers())
+            ema_buffers = dict(model_ema.named_buffers())
+            for name, buffer in model_buffers.items():
+                if name in ema_buffers:
+                    ema_buffers[name].data.copy_(buffer.data)
+
+    def _get_eval_model(self):
+        if self.use_ema_for_eval:
+            return self.model_ema, "ema"
+        return self.model, "main"
 
     def save_checkpoint(self, epoch: int, if_best: bool = False):
         if not self.accelerator.is_local_main_process:
@@ -232,8 +267,9 @@ class DynamicSingleVQVAETrainer():
                  if_use_wandb = True,
                  if_plot = False,
                  mode = "train",
-                 if_update = True
-                 ):
+                 if_update = True,
+                 model_override = None
+                  ):
         self.check_batch_info_flag = True if epoch == self.start_epoch else False
 
         if_train = mode == "train" and if_update
@@ -241,17 +277,19 @@ class DynamicSingleVQVAETrainer():
         records = Records(accelerator=self.accelerator)
         metric_logger = MetricLogger(delimiter="  ")
 
+        active_model = model_override if model_override is not None else self.model
+
         if if_train:
-            self.model.train(True)
+            active_model.train(True)
         else:
-            self.model.eval()
+            active_model.eval()
 
         if self.accelerator.use_distributed:
-            patch_size = self.model.module.patch_size
-            if_mask = self.model.module.if_mask
+            patch_size = active_model.module.patch_size
+            if_mask = active_model.module.if_mask
         else:
-            patch_size = self.model.patch_size
-            if_mask = self.model.if_mask
+            patch_size = active_model.patch_size
+            if_mask = active_model.if_mask
 
         if mode == "train":
             if if_train:
@@ -320,10 +358,10 @@ class DynamicSingleVQVAETrainer():
 
             # Forward
             if if_train:
-                output = self.model(features, labels, training = True)
+                output = active_model(features, labels, training = True)
             else:
                 with torch.no_grad():
-                    output = self.model(features, labels, training = False)
+                    output = active_model(features, labels, training = False)
 
             # Restore prices
             input_size = prices.shape
@@ -470,6 +508,7 @@ class DynamicSingleVQVAETrainer():
 
                 lr = self.optimizer.param_groups[0]["lr"]
                 records.update_value({"lr": lr})
+                self._update_model_ema()
 
             # gather data from multi gpu
             records.gather(self.train_gather_multi_gpu)
@@ -518,22 +557,25 @@ class DynamicSingleVQVAETrainer():
                  if_use_wandb=True,
                  if_plot=False,
                  mode="test",
-                 save_predictions: bool = False
-                 ):
+                 save_predictions: bool = False,
+                 model_override = None,
+                 eval_model_name: str = "main"
+                  ):
 
         self.check_batch_info_flag = True if epoch == self.start_epoch else False
 
         records = Records(accelerator=self.accelerator)
 
         metric_logger = MetricLogger(delimiter="  ")
-        self.model.eval()
+        active_model = model_override if model_override is not None else self.model
+        active_model.eval()
 
         if self.accelerator.use_distributed:
-            patch_size = self.model.module.patch_size
-            if_mask = self.model.module.if_mask
+            patch_size = active_model.module.patch_size
+            if_mask = active_model.module.if_mask
         else:
-            patch_size = self.model.patch_size
-            if_mask = self.model.if_mask
+            patch_size = active_model.patch_size
+            if_mask = active_model.if_mask
 
         header = f"| Test Epoch: [{epoch}/{self.num_testing_epochs}]"
         dataloader = self.test_dataloader
@@ -591,7 +633,7 @@ class DynamicSingleVQVAETrainer():
             labels = labels[:, :, -1:, :, 0]  # (N, C, T, S)
 
             with torch.no_grad():
-                output = self.model(features, labels, training=False)
+                output = active_model(features, labels, training=False)
 
             # Restore prices
             input_size = prices.shape
@@ -709,7 +751,8 @@ class DynamicSingleVQVAETrainer():
                         row_trues.append(float(true_value))
 
                 payload = build_prediction_payload(row_timestamps, row_assets, row_preds, row_trues)
-                save_joblib(payload, os.path.join(self.exp_path, f"{mode}_predictions.joblib"))
+                prediction_file = f"{mode}_predictions.joblib" if eval_model_name == "main" else f"{mode}_predictions_{eval_model_name}.joblib"
+                save_joblib(payload, os.path.join(self.exp_path, prediction_file))
 
         # Round
         for key, value in metrics.items():
@@ -920,25 +963,31 @@ class DynamicSingleVQVAETrainer():
             epoch = self.load_checkpoint(checkpoint_file=checkpoint_path)
 
         log_stats = {"epoch": epoch}
+        eval_model, eval_model_name = self._get_eval_model()
+        log_stats["eval_model"] = eval_model_name
 
         train_stats = self.run_step(epoch,
                                     mode="train",
                                     if_update=False,
                                     if_use_writer=False,
                                     if_use_wandb=False,
-                                    if_plot=False)
+                                    if_plot=False,
+                                    model_override=eval_model)
         valid_stats = self.run_step(epoch,
                                     mode="valid",
                                     if_use_writer=False,
                                     if_use_wandb=False,
-                                    if_plot=False)
+                                    if_plot=False,
+                                    model_override=eval_model)
 
         test_stats = self.run_test(epoch,
                                    mode="test",
                                    if_use_writer=False,
                                    if_use_wandb=False,
                                    if_plot=False,
-                                   save_predictions=True)
+                                   save_predictions=True,
+                                   model_override=eval_model,
+                                   eval_model_name=eval_model_name)
 
         log_stats.update({f"train_{k}": v for k, v in train_stats.items()})
         log_stats.update({f"valid_{k}": v for k, v in valid_stats.items()})

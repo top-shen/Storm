@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -73,35 +74,54 @@ class MultiAssetDataset(Dataset):
         self.timestamp_alignment = timestamp_alignment
 
         self.scaler_cfg = scaler_cfg
+        self.cache_meta = self._build_cache_meta()
         if os.path.exists(self.scaler_path):
-            self.scalers = load_joblib(self.scaler_path)
+            scaler_payload = load_joblib(self.scaler_path)
+            self.scalers = self._load_scaler_cache(scaler_payload)
         else:
             self.scalers = None
 
         if os.path.exists(self.scaled_data_path):
             scaled_data = load_joblib(self.scaled_data_path)
-            self.assets = scaled_data["assets"]
-            self.assets_df = scaled_data["assets_df"]
-            self.features = scaled_data["features"]
-            self.labels = scaled_data["labels"]
-            self.prices = scaled_data["prices"]
-            self.original_prices = scaled_data["original_prices"]
-            self.prices_mean = scaled_data["prices_mean"]
-            self.prices_std = scaled_data["prices_std"]
-            self.data_info = scaled_data["data_info"]
+            if self._is_compatible_cache(scaled_data):
+                self.assets = scaled_data["assets"]
+                self.assets_df = scaled_data["assets_df"]
+                self.features = scaled_data["features"]
+                self.labels = scaled_data["labels"]
+                self.prices = scaled_data["prices"]
+                self.original_prices = scaled_data["original_prices"]
+                self.prices_mean = scaled_data["prices_mean"]
+                self.prices_std = scaled_data["prices_std"]
+                self.data_info = scaled_data["data_info"]
+            else:
+                warnings.warn(
+                    f"Ignore stale scaled dataset cache: {self.scaled_data_path}. "
+                    "The cache metadata does not match the current dataset config, so it will be rebuilt."
+                )
+                self.assets, self.assets_df, self.features, self.labels = None, None, None, None
+                self.prices, self.original_prices, self.prices_mean, self.prices_std, self.data_info = None, None, None, None, None
         else:
             if self.if_norm and self.scalers is None and not self.fit_scaler:
                 raise FileNotFoundError(
                     f"Scaler file not found for transform-only dataset: {self.scaler_path}"
                 )
+            self.assets, self.assets_df, self.features, self.labels = None, None, None, None
+            self.prices, self.original_prices, self.prices_mean, self.prices_std, self.data_info = None, None, None, None, None
+
+        if self.assets is None:
             self.assets = self._init_assets()
             self.assets_df = self._load_assets_df()
             self.features, self.labels, self.prices, self.original_prices, self.scalers, self.prices_mean, self.prices_std = self._init_features()
             if self.if_norm and self.fit_scaler:
-                save_joblib(self.scalers, self.scaler_path)
+                scaler_payload = {
+                    "__cache_meta__": self.cache_meta,
+                    "scalers": self.scalers,
+                }
+                save_joblib(scaler_payload, self.scaler_path)
             self.data_info = self._init_data_info()
 
             scaled_data = {
+                "__cache_meta__": self.cache_meta,
                 "assets": self.assets,
                 "assets_df": self.assets_df,
                 "features": self.features,
@@ -114,6 +134,70 @@ class MultiAssetDataset(Dataset):
             }
 
             save_joblib(scaled_data, self.scaled_data_path)
+
+    def _build_cache_meta(self):
+        return {
+            "cache_version": 2,
+            "data_path": self.data_path,
+            "assets_path": self.assets_path,
+            "fields_name": self.fields_name,
+            "if_norm": self.if_norm,
+            "if_norm_temporal": self.if_norm_temporal,
+            "if_use_temporal": self.if_use_temporal,
+            "if_use_future": self.if_use_future,
+            "scaler_cfg": self.scaler_cfg,
+            "history_timestamps": self.history_timestamps,
+            "future_timestamps": self.future_timestamps,
+            "start_timestamp": self.start_timestamp,
+            "end_timestamp": self.end_timestamp,
+            "timestamp_format": self.timestamp_format,
+            "timestamp_alignment": self.timestamp_alignment,
+        }
+
+    def _is_compatible_cache(self, cache_payload):
+        if not isinstance(cache_payload, dict):
+            return False
+
+        cache_meta = cache_payload.get("__cache_meta__")
+        if cache_meta is None:
+            return False
+
+        return cache_meta == self.cache_meta
+
+    def _load_scaler_cache(self, scaler_payload):
+        if not isinstance(scaler_payload, dict):
+            warnings.warn(
+                f"Legacy scaler cache detected at {self.scaler_path} without metadata. "
+                "Consider deleting it once so future runs can use strict cache validation."
+            )
+            return scaler_payload
+
+        if "scalers" not in scaler_payload:
+            warnings.warn(
+                f"Unexpected scaler cache format at {self.scaler_path}. "
+                "Ignore it and rebuild scalers if needed."
+            )
+            return None
+
+        cache_meta = scaler_payload.get("__cache_meta__")
+        if cache_meta is None:
+            warnings.warn(
+                f"Scaler cache at {self.scaler_path} has no metadata. "
+                "Consider deleting it once so future runs can use strict cache validation."
+            )
+            return scaler_payload["scalers"]
+
+        if cache_meta != self.cache_meta:
+            message = (
+                f"Scaler cache metadata mismatch at {self.scaler_path}. "
+                "This usually means the dataset/scaler setting changed but the old scaler cache is still being reused."
+            )
+            if self.fit_scaler:
+                warnings.warn(message + " Ignore the stale scaler cache and refit on the current train split.")
+                return None
+            raise ValueError(message + " Please delete the stale scaler cache and rerun train first.")
+
+        return scaler_payload["scalers"]
 
     def _init_assets(self):
 

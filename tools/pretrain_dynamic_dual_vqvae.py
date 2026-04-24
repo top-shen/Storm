@@ -98,6 +98,10 @@ def get_args_parser():
     parser.add_argument("--no_train", action="store_false", dest="train")
     parser.set_defaults(train=True)
 
+    parser.add_argument("--resume", action="store_true", help="resume training from the latest checkpoint")
+    parser.add_argument("--no_resume", action="store_false", dest="resume")
+    parser.set_defaults(resume=True)
+
     parser.add_argument("--test", action="store_true", help="test model")
     parser.add_argument("--no_test", action="store_false", dest="test")
     parser.set_defaults(test=True)
@@ -124,6 +128,9 @@ def main(args):
 
     # 1. build config
     config = build_config(assemble_project_path(args.config), args)
+    config.merge_from_dict({
+        "resume": args.resume,
+    })
 
     # 2. set dtype
     dtype = to_torch_dtype(config.dtype)
@@ -235,7 +242,7 @@ def main(args):
     vae_ema = MODEL.build(config.vae)
     vae_ema.load_state_dict(vae_state_dict)
     vae_ema = vae_ema.to(device, dtype)
-    requires_grad(vae_ema, True)
+    requires_grad(vae_ema, False)
     vae_ema_shape_dict = record_model_param_shape(vae_ema)
     logger.info(f"| VAE EMA: \n{vae_ema}")
     logger.info("| VAE EMA shape: \n{}".format("\n".join([f"{k}: {v}" for k, v in vae_ema_shape_dict.items()])))
@@ -244,7 +251,7 @@ def main(args):
     dit_ema = MODEL.build(config.dit)
     dit_ema.load_state_dict(dit_state_dict)
     dit_ema = dit_ema.to(device, dtype)
-    requires_grad(dit_ema, True)
+    requires_grad(dit_ema, False)
     dit_ema_shape_dict = record_model_param_shape(dit_ema)
     logger.info(f"| DIT EMA: \n{dit_ema}")
     logger.info("| DIT EMA shape: \n{}".format("\n".join([f"{k}: {v}" for k, v in dit_ema_shape_dict.items()])))

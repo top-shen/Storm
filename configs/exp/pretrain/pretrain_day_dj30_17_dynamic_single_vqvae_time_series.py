@@ -1,5 +1,5 @@
 workdir = "workdir"
-tag = "pretrain_day_dj30_17_dynamic_single_vqvae_time_series_200e_h8_cb512"
+tag = "single_vqvae_512"
 exp_path = f"{workdir}/{tag}"
 log_file = "storm.log"
 tensorboard_path = "tensorboard"
@@ -85,6 +85,9 @@ temperature = 1.0
 dtype = "fp32"
 num_classes = 3
 dropout_prob = 0.1
+ema_decay = 0.999
+ema_update_after_step = 0
+use_ema_for_eval = True
 
 cl_loss_weight = 1e-3
 ret_loss_weight = 0.1

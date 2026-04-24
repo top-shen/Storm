@@ -996,6 +996,8 @@ class DynamicSingleVQVAETrainer():
         if self.is_main_process:
             with open(os.path.join(self.exp_path, "test_log.txt"), "w", ) as f:
                 f.write(json.dumps(log_stats) + "\n")
+            with open(os.path.join(self.exp_path, f"test_log_{eval_model_name}.txt"), "w", ) as f:
+                f.write(json.dumps(log_stats) + "\n")
 
         self.logger.info("| Test finished.")
 

@@ -1,0 +1,1 @@
+tools/train_qlib_lgbm.py --config configs/exp/predict/predict_day_dj30_17_qlib_lgbm.py

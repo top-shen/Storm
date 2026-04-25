@@ -1,0 +1,14 @@
+artifact_uri: file:///media/lenovo/data2/shenjihe/Storm/mlruns/207144178735635066/695f3189b8e84f24ad18680f8efc418b/artifacts
+end_time: 1775712764327
+entry_point_name: ''
+experiment_id: '207144178735635066'
+lifecycle_stage: active
+run_id: 695f3189b8e84f24ad18680f8efc418b
+run_name: mlflow_recorder
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1775712744158
+status: 3
+tags: []
+user_id: lenovo

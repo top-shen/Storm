@@ -57,6 +57,8 @@ class DynamicSingleVQVAETrainer():
         self.ema_decay = getattr(self.config, "ema_decay", None)
         self.ema_update_after_step = getattr(self.config, "ema_update_after_step", 0)
         self.use_ema_for_eval = getattr(self.config, "use_ema_for_eval", False)
+        self.best_metric = getattr(self.config, "best_metric", "ret_mse")
+        self.best_metric_mode = getattr(self.config, "best_metric_mode", "min")
         self.num_training_epochs = self.config.num_training_epochs
         self.num_valid_epochs = self.config.num_training_epochs
         self.num_testing_epochs = 1
@@ -487,6 +489,30 @@ class DynamicSingleVQVAETrainer():
                     "mse": mse
                 })
 
+            with torch.no_grad():
+                ret_mse = MSE(labels.detach(), pred_label.detach())
+                pred_up = pred_label.detach() > 0
+                true_up = labels.detach() > 0
+                tp = (pred_up & true_up).sum().to(torch.float32)
+                tn = (~pred_up & ~true_up).sum().to(torch.float32)
+                fp = (pred_up & ~true_up).sum().to(torch.float32)
+                fn = (~pred_up & true_up).sum().to(torch.float32)
+                direction_total = tp + tn + fp + fn
+                acc = (tp + tn) / direction_total.clamp_min(1.0)
+                mcc_denominator = torch.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+                mcc = torch.where(
+                    mcc_denominator > 0,
+                    (tp * tn - fp * fn) / mcc_denominator,
+                    torch.zeros_like(mcc_denominator),
+                )
+
+                records.update({
+                    "price_mse": mse,
+                    "ret_mse": ret_mse,
+                    "acc": acc,
+                    "mcc": mcc,
+                })
+
             # pred_label = pred_label.detach()
             # labels = labels.detach()
             #
@@ -586,7 +612,12 @@ class DynamicSingleVQVAETrainer():
             sample_batchs = random.sample(range(len(dataloader)), num_plot_sample_batch)
 
         rankics = []
-        mses = []
+        price_mses = []
+        ret_mses = []
+        tp = 0
+        tn = 0
+        fp = 0
+        fn = 0
         pred_labels_all = []
         true_labels_all = []
         end_timestamps_all = []
@@ -680,12 +711,21 @@ class DynamicSingleVQVAETrainer():
             restored_pred_prices = restored_pred_prices.detach()
             restored_target_prices = restored_target_prices.detach()
 
-            mse = MSE(restored_target_prices, restored_pred_prices)
-            mses.append(float(mse.detach().cpu().item()))
-
             pred_label = pred_label.detach()
             labels = labels.detach()
             end_timestamp = end_timestamp.detach()
+
+            price_mse = MSE(restored_target_prices, restored_pred_prices)
+            ret_mse = MSE(labels, pred_label)
+            price_mses.append(float(price_mse.detach().cpu().item()))
+            ret_mses.append(float(ret_mse.detach().cpu().item()))
+
+            pred_up = pred_label > 0
+            true_up = labels > 0
+            tp += int((pred_up & true_up).sum().detach().cpu().item())
+            tn += int((~pred_up & ~true_up).sum().detach().cpu().item())
+            fp += int((pred_up & ~true_up).sum().detach().cpu().item())
+            fn += int((~pred_up & true_up).sum().detach().cpu().item())
 
             batch_rankics = RankICSeries(pred_label, labels)
             rankics.extend(batch_rankics.detach().cpu().tolist())
@@ -696,7 +736,14 @@ class DynamicSingleVQVAETrainer():
             assets_all.extend(batch["asset"])
 
         metrics = dict()
-        metrics["MSE"] = float(np.mean(mses)) if len(mses) > 0 else 0.0
+        metrics["MSE"] = float(np.mean(ret_mses)) if len(ret_mses) > 0 else 0.0
+        metrics["RET_MSE"] = metrics["MSE"]
+        metrics["PRICE_MSE"] = float(np.mean(price_mses)) if len(price_mses) > 0 else 0.0
+
+        direction_total = tp + tn + fp + fn
+        metrics["ACC"] = float((tp + tn) / direction_total) if direction_total > 0 else 0.0
+        mcc_denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        metrics["MCC"] = float((tp * tn - fp * fn) / mcc_denominator) if mcc_denominator > 0 else 0.0
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
         if rankic_values.size > 0:
@@ -924,14 +971,24 @@ class DynamicSingleVQVAETrainer():
     def train(self):
         self.logger.info("| Start training and evaluating VAE...")
 
-        min_metric = float("inf")
+        if self.best_metric_mode == "min":
+            best_metric_value = float("inf")
+        elif self.best_metric_mode == "max":
+            best_metric_value = float("-inf")
+        else:
+            raise ValueError(f"Unsupported best_metric_mode: {self.best_metric_mode}")
 
         for epoch in range(self.start_epoch, self.num_training_epochs + 1):
             train_stats = self.run_step(epoch, mode="train")
             valid_stats = self.run_step(epoch, mode="valid")
             test_stats = self.run_test(epoch, mode="test")
 
-            metric = valid_stats["mse"]
+            if self.best_metric not in valid_stats:
+                raise KeyError(
+                    f"best_metric={self.best_metric} not found in valid_stats. "
+                    f"Available metrics: {sorted(valid_stats.keys())}"
+                )
+            metric = valid_stats[self.best_metric]
 
             log_stats = {"epoch": epoch}
             log_stats.update({f"train_{k}": v for k, v in train_stats.items()})
@@ -945,8 +1002,13 @@ class DynamicSingleVQVAETrainer():
             if epoch % self.checkpoint_period == 0:
                 self.save_checkpoint(epoch)
 
-            if metric < min_metric:
-                min_metric = metric
+            if self.best_metric_mode == "min":
+                is_best = metric < best_metric_value
+            else:
+                is_best = metric > best_metric_value
+
+            if is_best:
+                best_metric_value = metric
                 self.save_checkpoint(epoch, if_best=True)
 
     def test(self, checkpoint_path: str = None):

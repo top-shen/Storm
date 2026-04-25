@@ -88,6 +88,8 @@ dropout_prob = 0.1
 ema_decay = 0.999
 ema_update_after_step = 0
 use_ema_for_eval = True
+best_metric = "ret_mse"
+best_metric_mode = "min"
 
 cl_loss_weight = 1e-3
 ret_loss_weight = 0.1

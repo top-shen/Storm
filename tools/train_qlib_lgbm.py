@@ -76,7 +76,7 @@ def _save_predictions(exp_path, split, pred_series, label_df, label_column="ret1
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))
 
 
-def _evaluate(model, dataset, exp_path):
+def _evaluate(model, dataset, exp_path, label_column="ret1"):
     stats = {}
     for split in ["train", "valid", "test"]:
         pred = model.predict(dataset, segment=split)
@@ -84,8 +84,8 @@ def _evaluate(model, dataset, exp_path):
         if isinstance(pred, pd.DataFrame):
             pred = pred.iloc[:, 0]
         pred.name = "score"
-        metrics = calc_prediction_metrics(label_df, pred, label_column="ret1")
-        _save_predictions(exp_path, split, pred, label_df, label_column=config.label_column)
+        metrics = calc_prediction_metrics(label_df, pred, label_column=label_column)
+        _save_predictions(exp_path, split, pred, label_df, label_column=label_column)
         stats.update({f"{split}_{k}": v for k, v in metrics.items()})
     return stats
 
@@ -116,7 +116,7 @@ def main(args):
         save_joblib(model, model_path)
         logger.info(f"| Saved Qlib LGBM model: {model_path}")
 
-        stats = _evaluate(model, dataset, config.exp_path)
+        stats = _evaluate(model, dataset, config.exp_path, label_column=config.label_column)
         with open(os.path.join(config.exp_path, "train_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
         logger.info(f"| Qlib LGBM train/test stats: {stats}")
@@ -128,7 +128,7 @@ def main(args):
             raise FileNotFoundError(f"Qlib LGBM checkpoint not found: {ckpt}")
         logger.info(f"| Load Qlib LGBM model: {ckpt}")
 
-        stats = _evaluate(model, dataset, config.exp_path)
+        stats = _evaluate(model, dataset, config.exp_path, label_column=config.label_column)
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
         logger.info(f"| Qlib LGBM test stats: {stats}")

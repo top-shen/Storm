@@ -316,6 +316,8 @@ def main(args):
                 "epoch": epoch,
                 "train_loss": round(train_loss, 6),
                 "valid_MSE": valid_metrics["MSE"],
+                "valid_ACC": valid_metrics["ACC"],
+                "valid_MCC": valid_metrics["MCC"],
                 "valid_RANKIC": valid_metrics["RANKIC"],
                 "valid_RANKICIR": valid_metrics["RANKICIR"],
             }

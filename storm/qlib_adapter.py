@@ -256,6 +256,26 @@ def _calc_rankic_np(preds: List[np.ndarray], futrs: List[np.ndarray]) -> np.ndar
     return np.asarray(values, dtype=np.float64)
 
 
+def _direction_metrics_np(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
+    pred_up = np.asarray(y_pred, dtype=np.float64) > 0
+    true_up = np.asarray(y_true, dtype=np.float64) > 0
+
+    tp = float(np.logical_and(pred_up, true_up).sum())
+    tn = float(np.logical_and(~pred_up, ~true_up).sum())
+    fp = float(np.logical_and(pred_up, ~true_up).sum())
+    fn = float(np.logical_and(~pred_up, true_up).sum())
+
+    total = tp + tn + fp + fn
+    acc = (tp + tn) / total if total > 0 else 0.0
+    denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    mcc = (tp * tn - fp * fn) / denominator if denominator > 0 else 0.0
+
+    return {
+        "ACC": round(float(acc), 6),
+        "MCC": round(float(mcc), 6),
+    }
+
+
 def calc_prediction_metrics(
     label_df: pd.DataFrame,
     pred_series: pd.Series,
@@ -269,6 +289,7 @@ def calc_prediction_metrics(
     y_true = merged[("label", label_column)].astype(float)
     y_pred = merged[("prediction", pred_name)].astype(float)
     mse = float(((y_true - y_pred) ** 2).mean())
+    direction_metrics = _direction_metrics_np(y_pred.to_numpy(), y_true.to_numpy())
 
     pred_groups = []
     true_groups = []
@@ -289,6 +310,8 @@ def calc_prediction_metrics(
 
     return {
         "MSE": round(mse, 6),
+        "ACC": direction_metrics["ACC"],
+        "MCC": direction_metrics["MCC"],
         "RANKIC": round(rankic, 6),
         "RANKICIR": round(rankicir, 6),
     }

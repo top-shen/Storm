@@ -155,7 +155,13 @@ def _evaluate(model, dataloader, device, label_column, save_path=None):
     metrics = calc_prediction_metrics(merged_label_df, merged_pred_series, label_column=label_column)
     metrics["MSE"] = round(total_squared_error / max(total_count, 1), 6)
     if save_path is not None:
-        save_joblib(payload, save_path)
+        enriched_payload = build_prediction_payload(
+            payload["end_timestamp"],
+            payload["asset"],
+            payload["pred_label"],
+            payload["true_label"],
+        )
+        save_joblib(enriched_payload, save_path)
     return metrics
 
 
@@ -209,6 +215,8 @@ def main(args):
                 "epoch": epoch,
                 "train_loss": round(train_loss, 6),
                 "valid_MSE": valid_metrics["MSE"],
+                "valid_ACC": valid_metrics["ACC"],
+                "valid_MCC": valid_metrics["MCC"],
                 "valid_RANKIC": valid_metrics["RANKIC"],
                 "valid_RANKICIR": valid_metrics["RANKICIR"],
             }

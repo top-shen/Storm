@@ -166,6 +166,25 @@ class DynamicSingleVQVAETrainer():
             return self.model_ema, "ema"
         return self.model, "main"
 
+    @staticmethod
+    def _direction_counts(pred_label: torch.Tensor, true_label: torch.Tensor) -> Dict[str, torch.Tensor]:
+        pred_up = pred_label > 0
+        true_up = true_label > 0
+        return {
+            "direction_tp": (pred_up & true_up).sum().to(torch.float32),
+            "direction_tn": (~pred_up & ~true_up).sum().to(torch.float32),
+            "direction_fp": (pred_up & ~true_up).sum().to(torch.float32),
+            "direction_fn": (~pred_up & true_up).sum().to(torch.float32),
+        }
+
+    @staticmethod
+    def _direction_metrics_from_counts(tp: float, tn: float, fp: float, fn: float) -> Tuple[float, float]:
+        total = tp + tn + fp + fn
+        acc = (tp + tn) / total if total > 0 else 0.0
+        denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        mcc = (tp * tn - fp * fn) / denominator if denominator > 0 else 0.0
+        return float(acc), float(mcc)
+
     def save_checkpoint(self, epoch: int, if_best: bool = False):
         if not self.accelerator.is_local_main_process:
             return  # Only save checkpoint on the main process
@@ -491,26 +510,17 @@ class DynamicSingleVQVAETrainer():
 
             with torch.no_grad():
                 ret_mse = MSE(labels.detach(), pred_label.detach())
-                pred_up = pred_label.detach() > 0
-                true_up = labels.detach() > 0
-                tp = (pred_up & true_up).sum().to(torch.float32)
-                tn = (~pred_up & ~true_up).sum().to(torch.float32)
-                fp = (pred_up & ~true_up).sum().to(torch.float32)
-                fn = (~pred_up & true_up).sum().to(torch.float32)
-                direction_total = tp + tn + fp + fn
-                acc = (tp + tn) / direction_total.clamp_min(1.0)
-                mcc_denominator = torch.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
-                mcc = torch.where(
-                    mcc_denominator > 0,
-                    (tp * tn - fp * fn) / mcc_denominator,
-                    torch.zeros_like(mcc_denominator),
+                direction_counts = self._direction_counts(pred_label.detach(), labels.detach())
+                acc, mcc = self._direction_metrics_from_counts(
+                    *(direction_counts[key].item() for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn"))
                 )
 
                 records.update({
                     "price_mse": mse,
                     "ret_mse": ret_mse,
-                    "acc": acc,
-                    "mcc": mcc,
+                    **direction_counts,
+                    "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),
+                    "mcc": torch.tensor(mcc, device=self.device, dtype=self.dtype),
                 })
 
             # pred_label = pred_label.detach()
@@ -561,6 +571,15 @@ class DynamicSingleVQVAETrainer():
         if if_use_writer and self.is_main_process:
             self.writer.flush()
 
+        stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        if all(key in stats for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn")):
+            stats["acc"], stats["mcc"] = self._direction_metrics_from_counts(
+                stats["direction_tp"],
+                stats["direction_tn"],
+                stats["direction_fp"],
+                stats["direction_fn"],
+            )
+
         if mode == "train":
             self.global_train_step = global_step
             log_str = "| Train averaged stats: "
@@ -571,11 +590,11 @@ class DynamicSingleVQVAETrainer():
             self.global_test_step = global_step
             log_str = "| Test averaged stats: "
 
-        for name, meter in metric_logger.meters.items():
-            log_str += f"- {name}: {meter}"
+        for name, value in stats.items():
+            log_str += f"- {name}: {value:.4f}"
         self.logger.info(log_str)
 
-        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        return stats
 
     def run_test(self,
                  epoch,
@@ -720,12 +739,11 @@ class DynamicSingleVQVAETrainer():
             price_mses.append(float(price_mse.detach().cpu().item()))
             ret_mses.append(float(ret_mse.detach().cpu().item()))
 
-            pred_up = pred_label > 0
-            true_up = labels > 0
-            tp += int((pred_up & true_up).sum().detach().cpu().item())
-            tn += int((~pred_up & ~true_up).sum().detach().cpu().item())
-            fp += int((pred_up & ~true_up).sum().detach().cpu().item())
-            fn += int((~pred_up & true_up).sum().detach().cpu().item())
+            direction_counts = self._direction_counts(pred_label, labels)
+            tp += int(direction_counts["direction_tp"].detach().cpu().item())
+            tn += int(direction_counts["direction_tn"].detach().cpu().item())
+            fp += int(direction_counts["direction_fp"].detach().cpu().item())
+            fn += int(direction_counts["direction_fn"].detach().cpu().item())
 
             batch_rankics = RankICSeries(pred_label, labels)
             rankics.extend(batch_rankics.detach().cpu().tolist())
@@ -740,10 +758,11 @@ class DynamicSingleVQVAETrainer():
         metrics["RET_MSE"] = metrics["MSE"]
         metrics["PRICE_MSE"] = float(np.mean(price_mses)) if len(price_mses) > 0 else 0.0
 
-        direction_total = tp + tn + fp + fn
-        metrics["ACC"] = float((tp + tn) / direction_total) if direction_total > 0 else 0.0
-        mcc_denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
-        metrics["MCC"] = float((tp * tn - fp * fn) / mcc_denominator) if mcc_denominator > 0 else 0.0
+        count_tensor = torch.tensor([tp, tn, fp, fn], dtype=torch.float64, device=self.device)
+        if self.accelerator is not None:
+            count_tensor = self.accelerator.gather(count_tensor).view(-1, 4).sum(dim=0)
+        tp, tn, fp, fn = [float(x) for x in count_tensor.detach().cpu().tolist()]
+        metrics["ACC"], metrics["MCC"] = self._direction_metrics_from_counts(tp, tn, fp, fn)
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
         if rankic_values.size > 0:

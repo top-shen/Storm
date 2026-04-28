@@ -185,6 +185,33 @@ class DynamicSingleVQVAETrainer():
         mcc = (tp * tn - fp * fn) / denominator if denominator > 0 else 0.0
         return float(acc), float(mcc)
 
+    @staticmethod
+    def _pearson_ic_series(pred_label: torch.Tensor, true_label: torch.Tensor) -> torch.Tensor:
+        if pred_label.dim() == 1:
+            pred_label = pred_label.unsqueeze(0)
+        else:
+            pred_label = pred_label.reshape(pred_label.shape[0], -1)
+
+        if true_label.dim() == 1:
+            true_label = true_label.unsqueeze(0)
+        else:
+            true_label = true_label.reshape(true_label.shape[0], -1)
+
+        pred_label = pred_label.float()
+        true_label = true_label.float()
+        pred_centered = pred_label - pred_label.mean(dim=1, keepdim=True)
+        true_centered = true_label - true_label.mean(dim=1, keepdim=True)
+
+        covariance = torch.mean(pred_centered * true_centered, dim=1)
+        pred_std = torch.sqrt(torch.mean(pred_centered.square(), dim=1))
+        true_std = torch.sqrt(torch.mean(true_centered.square(), dim=1))
+        denominator = pred_std * true_std
+
+        ic_values = torch.zeros_like(covariance)
+        valid = denominator > 0
+        ic_values[valid] = covariance[valid] / denominator[valid]
+        return torch.nan_to_num(ic_values, nan=0.0, posinf=0.0, neginf=0.0)
+
     def save_checkpoint(self, epoch: int, if_best: bool = False):
         if not self.accelerator.is_local_main_process:
             return  # Only save checkpoint on the main process
@@ -630,6 +657,7 @@ class DynamicSingleVQVAETrainer():
             num_plot_sample_batch = int(self.num_plot_samples // self.plot.sample_num)
             sample_batchs = random.sample(range(len(dataloader)), num_plot_sample_batch)
 
+        ics = []
         rankics = []
         price_mses = []
         ret_mses = []
@@ -736,8 +764,12 @@ class DynamicSingleVQVAETrainer():
 
             price_mse = MSE(restored_target_prices, restored_pred_prices)
             ret_mse = MSE(labels, pred_label)
-            price_mses.append(float(price_mse.detach().cpu().item()))
-            ret_mses.append(float(ret_mse.detach().cpu().item()))
+            mse_tensor = torch.stack([price_mse.detach().float(), ret_mse.detach().float()])
+            if self.accelerator is not None:
+                mse_tensor = self.accelerator.gather_for_metrics(mse_tensor)
+            mse_tensor = mse_tensor.reshape(-1, 2).detach().cpu().numpy()
+            price_mses.extend(mse_tensor[:, 0].tolist())
+            ret_mses.extend(mse_tensor[:, 1].tolist())
 
             direction_counts = self._direction_counts(pred_label, labels)
             tp += int(direction_counts["direction_tp"].detach().cpu().item())
@@ -745,7 +777,12 @@ class DynamicSingleVQVAETrainer():
             fp += int(direction_counts["direction_fp"].detach().cpu().item())
             fn += int(direction_counts["direction_fn"].detach().cpu().item())
 
+            batch_ics = self._pearson_ic_series(pred_label, labels)
             batch_rankics = RankICSeries(pred_label, labels)
+            if self.accelerator is not None:
+                batch_ics = self.accelerator.gather_for_metrics(batch_ics)
+                batch_rankics = self.accelerator.gather_for_metrics(batch_rankics)
+            ics.extend(batch_ics.detach().cpu().tolist())
             rankics.extend(batch_rankics.detach().cpu().tolist())
 
             end_timestamps_all.append(end_timestamp.cpu().numpy())
@@ -763,6 +800,9 @@ class DynamicSingleVQVAETrainer():
             count_tensor = self.accelerator.gather(count_tensor).view(-1, 4).sum(dim=0)
         tp, tn, fp, fn = [float(x) for x in count_tensor.detach().cpu().tolist()]
         metrics["ACC"], metrics["MCC"] = self._direction_metrics_from_counts(tp, tn, fp, fn)
+
+        ic_values = np.asarray(ics, dtype=np.float64)
+        metrics["IC"] = float(np.mean(ic_values)) if ic_values.size > 0 else 0.0
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
         if rankic_values.size > 0:

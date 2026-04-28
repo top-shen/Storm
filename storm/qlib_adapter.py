@@ -251,6 +251,33 @@ def _rank_ic_single_np(pred_row: np.ndarray, futr_row: np.ndarray) -> float:
     return float(covariance / (pred_std * futr_std))
 
 
+def _ic_single_np(pred_row: np.ndarray, futr_row: np.ndarray) -> float:
+    pred_row = np.asarray(pred_row, dtype=np.float64)
+    futr_row = np.asarray(futr_row, dtype=np.float64)
+
+    if pred_row.size <= 1 or futr_row.size <= 1:
+        return 0.0
+    if np.unique(pred_row).size < 2 or np.unique(futr_row).size < 2:
+        return 0.0
+
+    pred_centered = pred_row - pred_row.mean()
+    futr_centered = futr_row - futr_row.mean()
+
+    pred_std = pred_centered.std(ddof=0)
+    futr_std = futr_centered.std(ddof=0)
+    if pred_std <= 0 or futr_std <= 0:
+        return 0.0
+
+    covariance = np.mean(pred_centered * futr_centered)
+    value = covariance / (pred_std * futr_std)
+    return float(value) if np.isfinite(value) else 0.0
+
+
+def _calc_ic_np(preds: List[np.ndarray], futrs: List[np.ndarray]) -> np.ndarray:
+    values = [_ic_single_np(pred_row.reshape(-1), futr_row.reshape(-1)) for pred_row, futr_row in zip(preds, futrs)]
+    return np.asarray(values, dtype=np.float64)
+
+
 def _calc_rankic_np(preds: List[np.ndarray], futrs: List[np.ndarray]) -> np.ndarray:
     values = [_rank_ic_single_np(pred_row.reshape(-1), futr_row.reshape(-1)) for pred_row, futr_row in zip(preds, futrs)]
     return np.asarray(values, dtype=np.float64)
@@ -285,6 +312,18 @@ def calc_prediction_metrics(
     pred_frame = pred_series.to_frame(name=pred_name)
     pred_frame.columns = pd.MultiIndex.from_tuples([("prediction", pred_name)])
     merged = pd.concat([label_df, pred_frame], axis=1, join="inner")
+    metric_columns = [("label", label_column), ("prediction", pred_name)]
+    merged = merged.replace([np.inf, -np.inf], np.nan).dropna(subset=metric_columns)
+
+    if merged.empty:
+        return {
+            "MSE": 0.0,
+            "ACC": 0.0,
+            "MCC": 0.0,
+            "IC": 0.0,
+            "RANKIC": 0.0,
+            "RANKICIR": 0.0,
+        }
 
     y_true = merged[("label", label_column)].astype(float)
     y_pred = merged[("prediction", pred_name)].astype(float)
@@ -300,11 +339,14 @@ def calc_prediction_metrics(
         true_groups.append(group[("label", label_column)].to_numpy(dtype=np.float64)[None, :])
 
     if pred_groups:
+        ic_values = _calc_ic_np(pred_groups, true_groups)
+        ic = float(ic_values.mean())
         rankic_values = _calc_rankic_np(pred_groups, true_groups)
         rankic = float(rankic_values.mean())
         rankic_std = float(rankic_values.std())
         rankicir = float(rankic / rankic_std) if rankic_values.size > 1 and rankic_std > 0 else 0.0
     else:
+        ic = 0.0
         rankic = 0.0
         rankicir = 0.0
 
@@ -312,6 +354,7 @@ def calc_prediction_metrics(
         "MSE": round(mse, 6),
         "ACC": direction_metrics["ACC"],
         "MCC": direction_metrics["MCC"],
+        "IC": round(ic, 6),
         "RANKIC": round(rankic, 6),
         "RANKICIR": round(rankicir, 6),
     }

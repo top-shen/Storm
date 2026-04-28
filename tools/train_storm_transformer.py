@@ -217,6 +217,7 @@ def main(args):
                 "valid_MSE": valid_metrics["MSE"],
                 "valid_ACC": valid_metrics["ACC"],
                 "valid_MCC": valid_metrics["MCC"],
+                "valid_IC": valid_metrics["IC"],
                 "valid_RANKIC": valid_metrics["RANKIC"],
                 "valid_RANKICIR": valid_metrics["RANKICIR"],
             }

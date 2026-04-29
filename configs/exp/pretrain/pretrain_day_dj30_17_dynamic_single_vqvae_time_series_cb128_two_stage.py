@@ -4,14 +4,14 @@ _base_ = [
 
 tag = "single_vqvae_two_stage_128"
 
-trainer.update(dict(type="DynamicSingleVQVAETwoStageTrainer"))
+trainer = dict(type="DynamicSingleVQVAETwoStageTrainer")
 
 # Stage 1: train VQ-VAE representation with reconstruction/codebook losses.
 # Stage 2: freeze VQ-VAE modules and train prior/posterior return prediction.
 two_stage_training = True
 vqvae_pretrain_epochs = 100
 freeze_vqvae_in_predictor_stage = True
-predictor_stage_lr = vae_lr
+predictor_stage_lr = 1e-4
 
 # Do not save stage-1 checkpoints as best.pth; stage 1 is representation pretraining.
 best_after_epoch = vqvae_pretrain_epochs + 1

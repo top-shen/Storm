@@ -481,14 +481,40 @@ class DynamicSingleVQVAETrainer():
                 weighted_nll_loss = loss_dict["weighted_nll_loss"]
                 weighted_kl_loss = loss_dict["weighted_kl_loss"]
                 weighted_ret_loss = loss_dict["weighted_ret_loss"]
+                ranking_loss = loss_dict.get(
+                    "ranking_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                weighted_ranking_loss = loss_dict.get(
+                    "weighted_ranking_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                ic_loss = loss_dict.get(
+                    "ic_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                weighted_ic_loss = loss_dict.get(
+                    "weighted_ic_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
 
                 records.update({
                     "weighted_nll_loss": weighted_nll_loss,
                     "weighted_kl_loss": weighted_kl_loss,
-                    "weighted_ret_loss": weighted_ret_loss
+                    "weighted_ret_loss": weighted_ret_loss,
+                    "ranking_loss": ranking_loss,
+                    "weighted_ranking_loss": weighted_ranking_loss,
+                    "ic_loss": ic_loss,
+                    "weighted_ic_loss": weighted_ic_loss,
                 })
 
-                loss += weighted_nll_loss + weighted_kl_loss + weighted_ret_loss
+                loss += (
+                    weighted_nll_loss
+                    + weighted_kl_loss
+                    + weighted_ret_loss
+                    + weighted_ranking_loss
+                    + weighted_ic_loss
+                )
 
             if self.price_cont_loss_fn:
                 loss_dict = self.price_cont_loss_fn(prices=restored_pred_prices.squeeze(1))
@@ -537,6 +563,7 @@ class DynamicSingleVQVAETrainer():
 
             with torch.no_grad():
                 ret_mse = MSE(labels.detach(), pred_label.detach())
+                ic = self._pearson_ic_series(pred_label.detach(), labels.detach()).mean()
                 direction_counts = self._direction_counts(pred_label.detach(), labels.detach())
                 acc, mcc = self._direction_metrics_from_counts(
                     *(direction_counts[key].item() for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn"))
@@ -545,6 +572,7 @@ class DynamicSingleVQVAETrainer():
                 records.update({
                     "price_mse": mse,
                     "ret_mse": ret_mse,
+                    "ic": ic,
                     **direction_counts,
                     "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),
                     "mcc": torch.tensor(mcc, device=self.device, dtype=self.dtype),

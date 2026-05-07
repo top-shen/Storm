@@ -140,14 +140,18 @@ class SingleVQVAELoss(nn.Module):
             weighted_kl_loss = self.kl_loss_weight * kl_loss
         weighted_kl_loss = torch.sum(weighted_kl_loss) / weighted_kl_loss.shape[0]
 
-        ranking_loss = self._pairwise_ranking_loss(pred_label, label)
-        weighted_ranking_loss = ranking_loss
-        if self.ranking_loss_weight is not None:
+        if self.ranking_loss_weight is None or self.ranking_loss_weight == 0:
+            ranking_loss = pred_label.new_zeros(())
+            weighted_ranking_loss = pred_label.new_zeros(())
+        else:
+            ranking_loss = self._pairwise_ranking_loss(pred_label, label)
             weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
 
-        ic_loss = self._ic_loss(pred_label, label)
-        weighted_ic_loss = ic_loss
-        if self.ic_loss_weight is not None:
+        if self.ic_loss_weight is None or self.ic_loss_weight == 0:
+            ic_loss = pred_label.new_zeros(())
+            weighted_ic_loss = pred_label.new_zeros(())
+        else:
+            ic_loss = self._ic_loss(pred_label, label)
             weighted_ic_loss = self.ic_loss_weight * ic_loss
 
         loss_dict = dict(

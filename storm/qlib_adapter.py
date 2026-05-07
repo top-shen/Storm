@@ -283,23 +283,40 @@ def _calc_rankic_np(preds: List[np.ndarray], futrs: List[np.ndarray]) -> np.ndar
     return np.asarray(values, dtype=np.float64)
 
 
-def _direction_metrics_np(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
-    pred_up = np.asarray(y_pred, dtype=np.float64) > 0
-    true_up = np.asarray(y_true, dtype=np.float64) > 0
+def _precision_and_sr_np(
+    preds: List[np.ndarray],
+    futrs: List[np.ndarray],
+    top_n: int = 10,
+) -> Dict[str, float]:
+    precisions = []
+    portfolio_returns = []
 
-    tp = float(np.logical_and(pred_up, true_up).sum())
-    tn = float(np.logical_and(~pred_up, ~true_up).sum())
-    fp = float(np.logical_and(pred_up, ~true_up).sum())
-    fn = float(np.logical_and(~pred_up, true_up).sum())
+    for pred_row, futr_row in zip(preds, futrs):
+        pred_row = np.asarray(pred_row, dtype=np.float64).reshape(-1)
+        futr_row = np.asarray(futr_row, dtype=np.float64).reshape(-1)
+        if pred_row.size == 0 or futr_row.size == 0:
+            continue
 
-    total = tp + tn + fp + fn
-    acc = (tp + tn) / total if total > 0 else 0.0
-    denominator = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
-    mcc = (tp * tn - fp * fn) / denominator if denominator > 0 else 0.0
+        k = min(int(top_n), pred_row.size)
+        if k <= 0:
+            continue
 
+        top_indices = np.argsort(pred_row)[-k:]
+        top_returns = futr_row[top_indices]
+        precisions.append(float(np.mean(top_returns > 0)))
+        portfolio_returns.append(float(np.mean(top_returns)))
+
+    if len(portfolio_returns) <= 1:
+        sr = 0.0
+    else:
+        returns = np.asarray(portfolio_returns, dtype=np.float64)
+        ret_std = float(np.std(returns, ddof=0))
+        sr = float(np.mean(returns) / ret_std) if ret_std > 0 else 0.0
+
+    precision = float(np.mean(precisions)) if precisions else 0.0
     return {
-        "ACC": round(float(acc), 6),
-        "MCC": round(float(mcc), 6),
+        f"PRECISION@{top_n}": round(precision, 6),
+        "SR": round(sr, 6),
     }
 
 
@@ -307,6 +324,7 @@ def calc_prediction_metrics(
     label_df: pd.DataFrame,
     pred_series: pd.Series,
     label_column: str = "ret1",
+    top_n: int = 10,
 ) -> Dict[str, float]:
     pred_name = pred_series.name if pred_series.name is not None else "score"
     pred_frame = pred_series.to_frame(name=pred_name)
@@ -317,18 +335,11 @@ def calc_prediction_metrics(
 
     if merged.empty:
         return {
-            "MSE": 0.0,
-            "ACC": 0.0,
-            "MCC": 0.0,
             "IC": 0.0,
-            "RANKIC": 0.0,
-            "RANKICIR": 0.0,
+            "RIC": 0.0,
+            f"PRECISION@{top_n}": 0.0,
+            "SR": 0.0,
         }
-
-    y_true = merged[("label", label_column)].astype(float)
-    y_pred = merged[("prediction", pred_name)].astype(float)
-    mse = float(((y_true - y_pred) ** 2).mean())
-    direction_metrics = _direction_metrics_np(y_pred.to_numpy(), y_true.to_numpy())
 
     pred_groups = []
     true_groups = []
@@ -343,20 +354,20 @@ def calc_prediction_metrics(
         ic = float(ic_values.mean())
         rankic_values = _calc_rankic_np(pred_groups, true_groups)
         rankic = float(rankic_values.mean())
-        rankic_std = float(rankic_values.std())
-        rankicir = float(rankic / rankic_std) if rankic_values.size > 1 and rankic_std > 0 else 0.0
+        precision_sr = _precision_and_sr_np(pred_groups, true_groups, top_n=top_n)
     else:
         ic = 0.0
         rankic = 0.0
-        rankicir = 0.0
+        precision_sr = {
+            f"PRECISION@{top_n}": 0.0,
+            "SR": 0.0,
+        }
 
     return {
-        "MSE": round(mse, 6),
-        "ACC": direction_metrics["ACC"],
-        "MCC": direction_metrics["MCC"],
         "IC": round(ic, 6),
-        "RANKIC": round(rankic, 6),
-        "RANKICIR": round(rankicir, 6),
+        "RIC": round(rankic, 6),
+        f"PRECISION@{top_n}": precision_sr[f"PRECISION@{top_n}"],
+        "SR": precision_sr["SR"],
     }
 
 

@@ -165,6 +165,11 @@ def _evaluate(model, dataloader, device, label_column, save_path=None):
     return metrics
 
 
+def _paper_metrics(metrics: Dict[str, float]) -> Dict[str, float]:
+    keys = ("IC", "RIC", "PRECISION@10", "SR")
+    return {key: metrics[key] for key in keys if key in metrics}
+
+
 def _save_checkpoint(model, optimizer, epoch, checkpoint_path):
     torch.save({"epoch": epoch, "model_state": model.state_dict(), "optimizer_state": optimizer.state_dict()}, checkpoint_path)
 
@@ -215,11 +220,10 @@ def main(args):
                 "epoch": epoch,
                 "train_loss": round(train_loss, 6),
                 "valid_MSE": valid_metrics["MSE"],
-                "valid_ACC": valid_metrics["ACC"],
-                "valid_MCC": valid_metrics["MCC"],
                 "valid_IC": valid_metrics["IC"],
-                "valid_RANKIC": valid_metrics["RANKIC"],
-                "valid_RANKICIR": valid_metrics["RANKICIR"],
+                "valid_RIC": valid_metrics["RIC"],
+                "valid_PRECISION@10": valid_metrics["PRECISION@10"],
+                "valid_SR": valid_metrics["SR"],
             }
             with open(train_log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(log_item) + "\n")
@@ -240,7 +244,7 @@ def main(args):
         final_stats = {}
         for split, loader in [("train", train_eval_loader), ("valid", valid_loader), ("test", test_loader)]:
             metrics = _evaluate(model, loader, device, config.label_column, save_path=os.path.join(config.exp_path, f"{split}_predictions.joblib"))
-            final_stats.update({f"{split}_{key}": value for key, value in metrics.items()})
+            final_stats.update({f"{split}_{key}": value for key, value in _paper_metrics(metrics).items()})
         with open(os.path.join(config.exp_path, "best_metrics.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(final_stats) + "\n")
         logger.info(f"| STORM Transformer train/best stats: {final_stats}")
@@ -254,7 +258,7 @@ def main(args):
         test_stats = {}
         for split, loader in [("train", train_eval_loader), ("valid", valid_loader), ("test", test_loader)]:
             metrics = _evaluate(model, loader, device, config.label_column, save_path=os.path.join(config.exp_path, f"{split}_predictions.joblib"))
-            test_stats.update({f"{split}_{key}": value for key, value in metrics.items()})
+            test_stats.update({f"{split}_{key}": value for key, value in _paper_metrics(metrics).items()})
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(test_stats) + "\n")
         logger.info(f"| STORM Transformer test stats: {test_stats}")

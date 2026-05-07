@@ -212,6 +212,21 @@ class DynamicSingleVQVAETrainer():
         ic_values[valid] = covariance[valid] / denominator[valid]
         return torch.nan_to_num(ic_values, nan=0.0, posinf=0.0, neginf=0.0)
 
+    @staticmethod
+    def _precision_at_n_np(pred_labels: np.ndarray, true_labels: np.ndarray, top_n: int = 10) -> float:
+        pred_labels = np.asarray(pred_labels, dtype=np.float64)
+        true_labels = np.asarray(true_labels, dtype=np.float64)
+        if pred_labels.size == 0 or true_labels.size == 0:
+            return 0.0
+        pred_labels = pred_labels.reshape(pred_labels.shape[0], -1)
+        true_labels = true_labels.reshape(true_labels.shape[0], -1)
+        k = min(int(top_n), pred_labels.shape[1])
+        if k <= 0:
+            return 0.0
+        top_indices = np.argsort(pred_labels, axis=1)[:, -k:]
+        top_returns = np.take_along_axis(true_labels, top_indices, axis=1)
+        return float(np.mean(top_returns > 0))
+
     def save_checkpoint(self, epoch: int, if_best: bool = False):
         if not self.accelerator.is_local_main_process:
             return  # Only save checkpoint on the main process
@@ -818,31 +833,19 @@ class DynamicSingleVQVAETrainer():
             true_labels_all.append(labels.cpu().numpy())
             assets_all.extend(batch["asset"])
 
-        metrics = dict()
-        metrics["MSE"] = float(np.mean(ret_mses)) if len(ret_mses) > 0 else 0.0
-        metrics["RET_MSE"] = metrics["MSE"]
-        metrics["PRICE_MSE"] = float(np.mean(price_mses)) if len(price_mses) > 0 else 0.0
-
         count_tensor = torch.tensor([tp, tn, fp, fn], dtype=torch.float64, device=self.device)
         if self.accelerator is not None:
             count_tensor = self.accelerator.gather(count_tensor).view(-1, 4).sum(dim=0)
         tp, tn, fp, fn = [float(x) for x in count_tensor.detach().cpu().tolist()]
-        metrics["ACC"], metrics["MCC"] = self._direction_metrics_from_counts(tp, tn, fp, fn)
 
+        metrics = dict()
         ic_values = np.asarray(ics, dtype=np.float64)
         metrics["IC"] = float(np.mean(ic_values)) if ic_values.size > 0 else 0.0
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
-        if rankic_values.size > 0:
-            metrics["RANKIC"] = float(np.mean(rankic_values))
-        else:
-            metrics["RANKIC"] = 0.0
-
-        if rankic_values.size > 1:
-            rankic_std = float(np.std(rankic_values))
-            metrics["RANKICIR"] = float(np.mean(rankic_values) / rankic_std) if rankic_std > 0 else 0.0
-        else:
-            metrics["RANKICIR"] = 0.0
+        metrics["RIC"] = float(np.mean(rankic_values)) if rankic_values.size > 0 else 0.0
+        metrics["PRECISION@10"] = 0.0
+        metrics["SR"] = 0.0
 
         # Process extra records
         if self.is_main_process and len(end_timestamps_all) > 0:
@@ -861,14 +864,8 @@ class DynamicSingleVQVAETrainer():
                                                  true_labels=true_labels)
 
             metrics.update({
-                "CW": downstream_metrics["CW"],
-                "ARR%": downstream_metrics["ARR%"],
+                "PRECISION@10": self._precision_at_n_np(pred_labels, true_labels, top_n=10),
                 "SR": downstream_metrics["SR"],
-                "CR": downstream_metrics["CR"],
-                "SOR": downstream_metrics["SOR"],
-                "DD": downstream_metrics["DD"],
-                "MDD%": downstream_metrics["MDD%"],
-                "VOL": downstream_metrics["VOL"],
             })
 
             if save_predictions:

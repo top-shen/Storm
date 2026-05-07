@@ -97,7 +97,16 @@ def main() -> None:
 
     default_groups = {
         "loss_overview.png": ["train_loss", "valid_loss", "loss", "valid_MSE", "valid_mse", "train_mse"],
-        "rank_metrics.png": ["valid_RANKIC", "valid_RANKICIR", "train_RANKIC", "train_RANKICIR"],
+        "paper_metrics.png": [
+            "valid_IC",
+            "valid_RIC",
+            "valid_PRECISION@10",
+            "valid_SR",
+            "train_IC",
+            "train_RIC",
+            "train_PRECISION@10",
+            "train_SR",
+        ],
         "vq_losses_train.png": [
             "train_weighted_quantized_loss",
             "train_weighted_commit_loss",

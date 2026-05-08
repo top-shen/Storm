@@ -14,6 +14,57 @@ from storm.models.modules.transformer import Mlp
 from storm.models.modules.distribution import DiagonalGaussianDistribution
 
 
+class FactorStockMixer(nn.Module):
+    """Lightweight cross-sectional mixer over the stock dimension.
+
+    Factors are ordered as time-major patch tokens: [B, T_patch * S, D].
+    The module reshapes them to [B, T_patch, S, D], mixes only the stock
+    dimension S through a low-rank market bottleneck, then restores shape.
+    """
+
+    def __init__(
+        self,
+        stock_num: int,
+        market_dim: int = 8,
+        dropout: float = 0.1,
+        residual_scale: float = 0.1,
+    ):
+        super().__init__()
+        self.stock_num = int(stock_num)
+        self.market_dim = int(market_dim)
+        self.residual_scale = float(residual_scale)
+
+        self.layer_norm_stock = nn.LayerNorm(self.stock_num)
+        self.stock_to_market = nn.Linear(self.stock_num, self.market_dim)
+        self.activation = nn.Hardswish()
+        self.market_to_stock = nn.Linear(self.market_dim, self.stock_num)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def forward(self, factors: torch.Tensor) -> torch.Tensor:
+        if factors.dim() != 3:
+            raise ValueError(f"FactorStockMixer expects [batch, tokens, dim], got shape {tuple(factors.shape)}.")
+        if self.stock_num <= 1:
+            raise ValueError("FactorStockMixer requires stock_num > 1.")
+
+        batch_size, token_num, latent_dim = factors.shape
+        if token_num % self.stock_num != 0:
+            raise ValueError(
+                "FactorStockMixer expects token_num to be divisible by stock_num; "
+                f"got token_num={token_num}, stock_num={self.stock_num}."
+            )
+
+        time_patch_num = token_num // self.stock_num
+        x = factors.reshape(batch_size, time_patch_num, self.stock_num, latent_dim)
+        x = x.permute(0, 1, 3, 2)  # [B, T_patch, D, S]
+        x = self.layer_norm_stock(x)
+        x = self.stock_to_market(x)
+        x = self.activation(x)
+        x = self.market_to_stock(x)
+        x = x.permute(0, 1, 3, 2).reshape(batch_size, token_num, latent_dim)
+
+        return factors + self.residual_scale * self.dropout(x)
+
+
 @MODEL.register_module(force=True)
 class DynamicSingleVQVAE(nn.Module):
     def __init__(self,
@@ -21,11 +72,16 @@ class DynamicSingleVQVAE(nn.Module):
                  config: Dict = None,  # cross-sectional config
                  asset_num: int = 29,  # asset number
                  use_quantized_only_for_factors: bool = False,
+                 use_stock_mixing: bool = False,
+                 stock_mixing_market_dim: int = 8,
+                 stock_mixing_dropout: float = 0.1,
+                 stock_mixing_residual_scale: float = 0.1,
                  ):
         super(DynamicSingleVQVAE, self).__init__()
 
         self.asset_num = asset_num
         self.use_quantized_only_for_factors = use_quantized_only_for_factors
+        self.use_stock_mixing = use_stock_mixing
 
         self.encoder_config = config.get("encoder_config", {})  # cross-sectional factor encoder config
         self.quantizer_config = config.get("quantizer_config", {})  # cross-sectional factor quantizer config
@@ -41,6 +97,13 @@ class DynamicSingleVQVAE(nn.Module):
 
         latent_dim = self.encoder.latent_dim if self.use_quantized_only_for_factors else self.encoder.latent_dim * 2
         factor_num = self.encoder.n_num
+        self.stock_mixer = FactorStockMixer(
+            stock_num=asset_num,
+            market_dim=stock_mixing_market_dim,
+            dropout=stock_mixing_dropout,
+            residual_scale=stock_mixing_residual_scale,
+        ) if self.use_stock_mixing else nn.Identity()
+
         # to post distribution encode latent
         self.to_pd_encode_latent = Mlp(
             in_features=latent_dim,
@@ -223,6 +286,8 @@ class DynamicSingleVQVAE(nn.Module):
             factors = quantized
         else:
             factors = torch.concat([enc, quantized], dim=-1)
+
+        factors = self.stock_mixer(factors)
 
         posterior = self.encode_post_distribution(factors, label)
         mu_post, sigma_post = posterior.mean, posterior.std

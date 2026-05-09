@@ -66,15 +66,19 @@ class SingleVQVAELoss(nn.Module):
         pred_centered = pred_label - pred_label.mean(dim=1, keepdim=True)
         label_centered = label - label.mean(dim=1, keepdim=True)
 
-        covariance = (pred_centered * label_centered).mean(dim=1)
-        pred_std = torch.sqrt((pred_centered ** 2).mean(dim=1)).clamp_min(self.ic_eps)
-        label_std = torch.sqrt((label_centered ** 2).mean(dim=1))
-        valid = label_std > self.ic_eps
+        pred_norm = torch.linalg.vector_norm(pred_centered, dim=1)
+        label_norm = torch.linalg.vector_norm(label_centered, dim=1)
+        valid = (pred_norm > self.ic_eps) & (label_norm > self.ic_eps)
 
         if not torch.any(valid):
             return pred_label.new_zeros(())
 
-        ic = covariance[valid] / (pred_std[valid] * label_std[valid].clamp_min(self.ic_eps))
+        ic = F.cosine_similarity(
+            pred_centered[valid],
+            label_centered[valid],
+            dim=1,
+            eps=self.ic_eps,
+        )
         ic = torch.nan_to_num(ic, nan=0.0, posinf=0.0, neginf=0.0)
         return 1.0 - ic.mean()
 

@@ -1042,7 +1042,8 @@ class VectorQuantizer(Module):
             if self.has_codebook_diversity_loss:
                 prob = (-distances * self.codebook_diversity_temperature).softmax(dim = -1)
                 avg_prob = reduce(prob, '... n l -> n l', 'mean')
-                codebook_diversity_loss = -entropy(avg_prob).mean()
+                codebook_size = avg_prob.shape[-1]
+                codebook_diversity_loss = -entropy(avg_prob).mean() / codebook_size
 
                 weighted_codebook_diversity_loss = codebook_diversity_loss * self.codebook_diversity_loss_weight
 

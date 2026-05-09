@@ -59,6 +59,12 @@ class DynamicSingleVQVAETrainer():
         self.use_ema_for_eval = getattr(self.config, "use_ema_for_eval", False)
         self.best_metric = getattr(self.config, "best_metric", "ret_mse")
         self.best_metric_mode = getattr(self.config, "best_metric_mode", "min")
+        self.reconstruction_target = getattr(self.config, "reconstruction_target", "prices")
+        if self.reconstruction_target not in {"prices", "features"}:
+            raise ValueError(
+                "reconstruction_target must be either 'prices' or 'features', "
+                f"got {self.reconstruction_target!r}"
+            )
         self.num_training_epochs = self.config.num_training_epochs
         self.num_valid_epochs = self.config.num_training_epochs
         self.num_testing_epochs = 1
@@ -165,6 +171,36 @@ class DynamicSingleVQVAETrainer():
         if self.use_ema_for_eval:
             return self.model_ema, "ema"
         return self.model, "main"
+
+    def _build_reconstruction_tensors(
+            self,
+            features: torch.Tensor,
+            prices: torch.Tensor,
+            prices_mean: torch.Tensor,
+            prices_std: torch.Tensor,
+            pred_recon: torch.Tensor,
+            patch_size: Tuple[int, int]):
+        if self.reconstruction_target == "features":
+            recon_target = features
+            restored_target_recon = features
+            restored_pred_recon = pred_recon
+        else:
+            recon_target = prices
+            restored_target_recon = prices * prices_std + prices_mean
+            restored_pred_recon = pred_recon * prices_std + prices_mean
+
+        recon_patch_size = (patch_size[0], patch_size[1], recon_target.shape[-1])
+        patch_info = get_patch_info(recon_target.shape, recon_patch_size)
+        patched_target_recon = patchify(recon_target, patch_info=patch_info)
+        patched_pred_recon = patchify(pred_recon, patch_info=patch_info)
+        return (
+            recon_target,
+            restored_target_recon,
+            restored_pred_recon,
+            patched_target_recon,
+            patched_pred_recon,
+            patch_info,
+        )
 
     @staticmethod
     def _direction_counts(pred_label: torch.Tensor, true_label: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -426,22 +462,25 @@ class DynamicSingleVQVAETrainer():
                 with torch.no_grad():
                     output = active_model(features, labels, training = False)
 
-            # Restore prices
-            input_size = prices.shape
-
-            pred_prices = output["recon"]
-            patch_size = (patch_size[0], patch_size[1], prices.shape[-1])
-            patch_info = get_patch_info(input_size, patch_size)
-
-            restored_target_prices = prices * prices_std + prices_mean
-            restored_pred_prices = pred_prices
-            restored_pred_prices = restored_pred_prices * prices_std + prices_mean # (N, C, T, S, 5)
-
-            patched_target_prices = patchify(prices, patch_info=patch_info)  # (N, L, D)
-            patched_pred_prices = patchify(pred_prices, patch_info=patch_info)  # (N, L, D)
+            pred_recon = output["recon"]
+            (
+                recon_target,
+                restored_target_recon,
+                restored_pred_recon,
+                patched_target_recon,
+                patched_pred_recon,
+                patch_info,
+            ) = self._build_reconstruction_tensors(
+                features=features,
+                prices=prices,
+                prices_mean=prices_mean,
+                prices_std=prices_std,
+                pred_recon=pred_recon,
+                patch_size=patch_size,
+            )
 
             # plot
-            if if_plot and data_iter_step in sample_batchs:
+            if self.reconstruction_target == "prices" and if_plot and data_iter_step in sample_batchs:
                 if self.is_main_process:
                     try:
                         save_dir = os.path.join(self.plot_path, "comparison_kline")
@@ -451,8 +490,8 @@ class DynamicSingleVQVAETrainer():
                             start_timestamp.detach().cpu().numpy(),
                             end_timestamp.detach().cpu().numpy(),
                             timestamps.detach().cpu().numpy(),
-                            restored_target_prices.squeeze(1).detach().cpu().numpy(),
-                            restored_pred_prices.squeeze(1).detach().cpu().numpy(),
+                            restored_target_recon.squeeze(1).detach().cpu().numpy(),
+                            restored_pred_recon.squeeze(1).detach().cpu().numpy(),
                             save_dir=save_dir,
                             save_prefix=save_prefix
                         )
@@ -484,8 +523,8 @@ class DynamicSingleVQVAETrainer():
             labels = labels.squeeze(1).squeeze(1)  # (N, S)
 
             if self.vae_loss_fn:
-                loss_dict = self.vae_loss_fn(sample=patched_pred_prices,
-                                             target_sample=patched_target_prices,
+                loss_dict = self.vae_loss_fn(sample=patched_pred_recon,
+                                             target_sample=patched_target_recon,
                                              pred_label=pred_label,
                                              label=labels,
                                              posterior=posterior,
@@ -531,8 +570,8 @@ class DynamicSingleVQVAETrainer():
                     + weighted_ic_loss
                 )
 
-            if self.price_cont_loss_fn:
-                loss_dict = self.price_cont_loss_fn(prices=restored_pred_prices.squeeze(1))
+            if self.price_cont_loss_fn and self.reconstruction_target == "prices":
+                loss_dict = self.price_cont_loss_fn(prices=restored_pred_recon.squeeze(1))
                 weighted_cont_loss = loss_dict["weighted_cont_loss"]
 
                 records.update({
@@ -540,28 +579,32 @@ class DynamicSingleVQVAETrainer():
                 })
 
                 loss += weighted_cont_loss
+            elif self.price_cont_loss_fn:
+                records.update({
+                    "weighted_cont_loss": torch.tensor(0.0, device=self.device, dtype=self.dtype)
+                })
 
             records.update({
                 "loss": loss
             })
 
             # Compute metrics
-            restored_pred_prices = patchify(restored_pred_prices, patch_info=patch_info)
-            restored_target_prices = patchify(restored_target_prices, patch_info=patch_info)
-            restored_pred_prices = restored_pred_prices.detach()
-            restored_target_prices = restored_target_prices.detach()
+            restored_pred_recon = patchify(restored_pred_recon, patch_info=patch_info)
+            restored_target_recon = patchify(restored_target_recon, patch_info=patch_info)
+            restored_pred_recon = restored_pred_recon.detach()
+            restored_target_recon = restored_target_recon.detach()
 
             if if_mask and if_mask:
                 mask = mask.detach()
-                mask = mask.repeat(1, 1, prices.shape[-1])
-                mask_target_prices = restored_target_prices * mask
-                mask_pred_prices = restored_pred_prices * mask
-                nomask_target_prices = restored_target_prices * (1.0 - mask)
-                nomask_pred_prices = restored_pred_prices * (1.0 - mask)
+                mask = mask.repeat(1, 1, recon_target.shape[-1])
+                mask_target_recon = restored_target_recon * mask
+                mask_pred_recon = restored_pred_recon * mask
+                nomask_target_recon = restored_target_recon * (1.0 - mask)
+                nomask_pred_recon = restored_pred_recon * (1.0 - mask)
 
-                mask_mse = MSE(mask_target_prices, mask_pred_prices)
-                nomask_mse = MSE(nomask_target_prices, nomask_pred_prices)
-                mse = MSE(restored_target_prices, restored_pred_prices)
+                mask_mse = MSE(mask_target_recon, mask_pred_recon)
+                nomask_mse = MSE(nomask_target_recon, nomask_pred_recon)
+                mse = MSE(restored_target_recon, restored_pred_recon)
 
                 records.update({
                     "mask_mse": mask_mse,
@@ -570,7 +613,7 @@ class DynamicSingleVQVAETrainer():
                 })
 
             else:
-                mse = MSE(restored_target_prices, restored_pred_prices)
+                mse = MSE(restored_target_recon, restored_pred_recon)
 
                 records.update({
                     "mse": mse
@@ -585,13 +628,17 @@ class DynamicSingleVQVAETrainer():
                 )
 
                 records.update({
-                    "price_mse": mse,
+                    "recon_mse": mse,
                     "ret_mse": ret_mse,
                     "ic": ic,
                     **direction_counts,
                     "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),
                     "mcc": torch.tensor(mcc, device=self.device, dtype=self.dtype),
                 })
+                if self.reconstruction_target == "features":
+                    records.update({"feature_mse": mse})
+                else:
+                    records.update({"price_mse": mse})
 
             # pred_label = pred_label.detach()
             # labels = labels.detach()
@@ -702,7 +749,7 @@ class DynamicSingleVQVAETrainer():
 
         ics = []
         rankics = []
-        price_mses = []
+        recon_mses = []
         ret_mses = []
         tp = 0
         tn = 0
@@ -756,22 +803,25 @@ class DynamicSingleVQVAETrainer():
             with torch.no_grad():
                 output = active_model(features, labels, training=False)
 
-            # Restore prices
-            input_size = prices.shape
-
-            pred_prices = output["recon"]
-            patch_size = (patch_size[0], patch_size[1], prices.shape[-1])
-            patch_info = get_patch_info(input_size, patch_size)
-
-            restored_target_prices = prices * prices_std + prices_mean
-            restored_pred_prices = pred_prices
-            restored_pred_prices = restored_pred_prices * prices_std + prices_mean  # (N, C, T, S, 5)
-
-            patched_target_prices = patchify(prices, patch_info=patch_info)  # (N, L, D)
-            patched_pred_prices = patchify(pred_prices, patch_info=patch_info)  # (N, L, D)
+            pred_recon = output["recon"]
+            (
+                recon_target,
+                restored_target_recon,
+                restored_pred_recon,
+                patched_target_recon,
+                patched_pred_recon,
+                patch_info,
+            ) = self._build_reconstruction_tensors(
+                features=features,
+                prices=prices,
+                prices_mean=prices_mean,
+                prices_std=prices_std,
+                pred_recon=pred_recon,
+                patch_size=patch_size,
+            )
 
             # plot
-            if if_plot and data_iter_step in sample_batchs:
+            if self.reconstruction_target == "prices" and if_plot and data_iter_step in sample_batchs:
                 if self.is_main_process:
                     try:
                         save_dir = os.path.join(self.plot_path, "comparison_kline")
@@ -781,8 +831,8 @@ class DynamicSingleVQVAETrainer():
                             start_timestamp.detach().cpu().numpy(),
                             end_timestamp.detach().cpu().numpy(),
                             timestamps.detach().cpu().numpy(),
-                            restored_target_prices.squeeze(1).detach().cpu().numpy(),
-                            restored_pred_prices.squeeze(1).detach().cpu().numpy(),
+                            restored_target_recon.squeeze(1).detach().cpu().numpy(),
+                            restored_pred_recon.squeeze(1).detach().cpu().numpy(),
                             save_dir=save_dir,
                             save_prefix=save_prefix
                         )
@@ -796,22 +846,22 @@ class DynamicSingleVQVAETrainer():
             labels = labels.squeeze(1).squeeze(1)  # (N, S)
 
             # Compute metrics
-            restored_pred_prices = patchify(restored_pred_prices, patch_info=patch_info)
-            restored_target_prices = patchify(restored_target_prices, patch_info=patch_info)
-            restored_pred_prices = restored_pred_prices.detach()
-            restored_target_prices = restored_target_prices.detach()
+            restored_pred_recon = patchify(restored_pred_recon, patch_info=patch_info)
+            restored_target_recon = patchify(restored_target_recon, patch_info=patch_info)
+            restored_pred_recon = restored_pred_recon.detach()
+            restored_target_recon = restored_target_recon.detach()
 
             pred_label = pred_label.detach()
             labels = labels.detach()
             end_timestamp = end_timestamp.detach()
 
-            price_mse = MSE(restored_target_prices, restored_pred_prices)
+            recon_mse = MSE(restored_target_recon, restored_pred_recon)
             ret_mse = MSE(labels, pred_label)
-            mse_tensor = torch.stack([price_mse.detach().float(), ret_mse.detach().float()])
+            mse_tensor = torch.stack([recon_mse.detach().float(), ret_mse.detach().float()])
             if self.accelerator is not None:
                 mse_tensor = self.accelerator.gather_for_metrics(mse_tensor)
             mse_tensor = mse_tensor.reshape(-1, 2).detach().cpu().numpy()
-            price_mses.extend(mse_tensor[:, 0].tolist())
+            recon_mses.extend(mse_tensor[:, 0].tolist())
             ret_mses.extend(mse_tensor[:, 1].tolist())
 
             direction_counts = self._direction_counts(pred_label, labels)
@@ -844,6 +894,13 @@ class DynamicSingleVQVAETrainer():
 
         rankic_values = np.asarray(rankics, dtype=np.float64)
         metrics["RIC"] = float(np.mean(rankic_values)) if rankic_values.size > 0 else 0.0
+        recon_mse_values = np.asarray(recon_mses, dtype=np.float64)
+        ret_mse_values = np.asarray(ret_mses, dtype=np.float64)
+        metrics["RET_MSE"] = float(np.mean(ret_mse_values)) if ret_mse_values.size > 0 else 0.0
+        if self.reconstruction_target == "features":
+            metrics["FEATURE_MSE"] = float(np.mean(recon_mse_values)) if recon_mse_values.size > 0 else 0.0
+        else:
+            metrics["PRICE_MSE"] = float(np.mean(recon_mse_values)) if recon_mse_values.size > 0 else 0.0
         metrics["PRECISION@10"] = 0.0
         metrics["SR"] = 0.0
 

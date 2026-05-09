@@ -5,8 +5,10 @@ _base_ = [
 tag = "single_vqvae_recon152_128"
 reconstruction_target = "features"
 
-config = dict(
-    decoder_config=dict(
-        output_dim=152,
-    ),
+vae = dict(
+    config=dict(
+        decoder_config=dict(
+            output_dim=152,
+        ),
+    )
 )

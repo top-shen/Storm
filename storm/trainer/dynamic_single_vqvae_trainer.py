@@ -569,6 +569,9 @@ class DynamicSingleVQVAETrainer():
                     + weighted_ranking_loss
                     + weighted_ic_loss
                 )
+            else:
+                weighted_ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+                weighted_ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
 
             if self.price_cont_loss_fn and self.reconstruction_target == "prices":
                 loss_dict = self.price_cont_loss_fn(prices=restored_pred_recon.squeeze(1))
@@ -630,6 +633,7 @@ class DynamicSingleVQVAETrainer():
                 records.update({
                     "recon_mse": mse,
                     "ret_mse": ret_mse,
+                    "return_rank_loss": ret_mse + weighted_ranking_loss.detach(),
                     "ic": ic,
                     **direction_counts,
                     "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),

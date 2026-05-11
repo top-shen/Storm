@@ -90,9 +90,9 @@ def _save_predictions(exp_path, split, pred_series, label_df, label_column="ret1
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))
 
 
-def _evaluate(model, dataset, raw_qlib_df, config, exp_path):
+def _evaluate(model, dataset, raw_qlib_df, config, exp_path, splits=("train", "valid", "test")):
     stats = {}
-    for split in ["train", "valid", "test"]:
+    for split in splits:
         pred = model.predict(dataset, segment=split)
         if isinstance(pred, pd.DataFrame):
             pred = pred.iloc[:, 0]
@@ -135,10 +135,10 @@ def main(args):
         save_joblib(model, model_path + '.joblib')
         logger.info(f"| Saved Qlib Transformer model: {model_path}")
 
-        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path)
+        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path, splits=("train", "valid"))
         with open(os.path.join(config.exp_path, "train_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
-        logger.info(f"| Qlib Transformer train/test stats: {stats}")
+        logger.info(f"| Qlib Transformer train/valid stats: {stats}")
 
     if args.test:
         ckpt = args.checkpoint_path_override or model_path + '.joblib'

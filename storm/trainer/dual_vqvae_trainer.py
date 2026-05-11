@@ -889,21 +889,19 @@ class DualVQVAETrainer():
 
     def train(self):
 
-        self.logger.info("| Start training and evaluating VAE...")
+        self.logger.info("| Start training VAE with train/valid only...")
 
         min_metric = float("inf")
 
         for epoch in range(self.start_epoch, self.num_training_epochs + 1):
             train_stats = self.run_step(epoch, mode="train")
             valid_stats = self.run_step(epoch, mode="valid")
-            test_stats = self.run_test(epoch, mode="test")
 
             metric = valid_stats["mse"]
 
             log_stats = {"epoch": epoch}
             log_stats.update({f"train_{k}": v for k, v in train_stats.items()})
             log_stats.update({f"valid_{k}": v for k, v in valid_stats.items()})
-            log_stats.update({f"test_{k}": v for k, v in test_stats.items()})
 
             if self.is_main_process:
                 with open(os.path.join(self.exp_path, "train_log.txt"), "a",) as f:

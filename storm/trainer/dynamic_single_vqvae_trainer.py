@@ -59,12 +59,6 @@ class DynamicSingleVQVAETrainer():
         self.use_ema_for_eval = getattr(self.config, "use_ema_for_eval", False)
         self.best_metric = getattr(self.config, "best_metric", "ret_mse")
         self.best_metric_mode = getattr(self.config, "best_metric_mode", "min")
-        self.reconstruction_target = getattr(self.config, "reconstruction_target", "prices")
-        if self.reconstruction_target not in {"prices", "features"}:
-            raise ValueError(
-                "reconstruction_target must be either 'prices' or 'features', "
-                f"got {self.reconstruction_target!r}"
-            )
         self.num_training_epochs = self.config.num_training_epochs
         self.num_valid_epochs = self.config.num_training_epochs
         self.num_testing_epochs = 1
@@ -174,20 +168,14 @@ class DynamicSingleVQVAETrainer():
 
     def _build_reconstruction_tensors(
             self,
-            features: torch.Tensor,
             prices: torch.Tensor,
             prices_mean: torch.Tensor,
             prices_std: torch.Tensor,
             pred_recon: torch.Tensor,
             patch_size: Tuple[int, int]):
-        if self.reconstruction_target == "features":
-            recon_target = features
-            restored_target_recon = features
-            restored_pred_recon = pred_recon
-        else:
-            recon_target = prices
-            restored_target_recon = prices * prices_std + prices_mean
-            restored_pred_recon = pred_recon * prices_std + prices_mean
+        recon_target = prices
+        restored_target_recon = prices * prices_std + prices_mean
+        restored_pred_recon = pred_recon * prices_std + prices_mean
 
         recon_patch_size = (patch_size[0], patch_size[1], recon_target.shape[-1])
         patch_info = get_patch_info(recon_target.shape, recon_patch_size)
@@ -471,7 +459,6 @@ class DynamicSingleVQVAETrainer():
                 patched_pred_recon,
                 patch_info,
             ) = self._build_reconstruction_tensors(
-                features=features,
                 prices=prices,
                 prices_mean=prices_mean,
                 prices_std=prices_std,
@@ -480,7 +467,7 @@ class DynamicSingleVQVAETrainer():
             )
 
             # plot
-            if self.reconstruction_target == "prices" and if_plot and data_iter_step in sample_batchs:
+            if if_plot and data_iter_step in sample_batchs:
                 if self.is_main_process:
                     try:
                         save_dir = os.path.join(self.plot_path, "comparison_kline")
@@ -573,7 +560,7 @@ class DynamicSingleVQVAETrainer():
                 weighted_ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
                 weighted_ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
 
-            if self.price_cont_loss_fn and self.reconstruction_target == "prices":
+            if self.price_cont_loss_fn:
                 loss_dict = self.price_cont_loss_fn(prices=restored_pred_recon.squeeze(1))
                 weighted_cont_loss = loss_dict["weighted_cont_loss"]
 
@@ -582,10 +569,6 @@ class DynamicSingleVQVAETrainer():
                 })
 
                 loss += weighted_cont_loss
-            elif self.price_cont_loss_fn:
-                records.update({
-                    "weighted_cont_loss": torch.tensor(0.0, device=self.device, dtype=self.dtype)
-                })
 
             records.update({
                 "loss": loss
@@ -639,10 +622,7 @@ class DynamicSingleVQVAETrainer():
                     "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),
                     "mcc": torch.tensor(mcc, device=self.device, dtype=self.dtype),
                 })
-                if self.reconstruction_target == "features":
-                    records.update({"feature_mse": mse})
-                else:
-                    records.update({"price_mse": mse})
+                records.update({"price_mse": mse})
 
             # pred_label = pred_label.detach()
             # labels = labels.detach()
@@ -816,7 +796,6 @@ class DynamicSingleVQVAETrainer():
                 patched_pred_recon,
                 patch_info,
             ) = self._build_reconstruction_tensors(
-                features=features,
                 prices=prices,
                 prices_mean=prices_mean,
                 prices_std=prices_std,
@@ -825,7 +804,7 @@ class DynamicSingleVQVAETrainer():
             )
 
             # plot
-            if self.reconstruction_target == "prices" and if_plot and data_iter_step in sample_batchs:
+            if if_plot and data_iter_step in sample_batchs:
                 if self.is_main_process:
                     try:
                         save_dir = os.path.join(self.plot_path, "comparison_kline")
@@ -901,10 +880,7 @@ class DynamicSingleVQVAETrainer():
         recon_mse_values = np.asarray(recon_mses, dtype=np.float64)
         ret_mse_values = np.asarray(ret_mses, dtype=np.float64)
         metrics["RET_MSE"] = float(np.mean(ret_mse_values)) if ret_mse_values.size > 0 else 0.0
-        if self.reconstruction_target == "features":
-            metrics["FEATURE_MSE"] = float(np.mean(recon_mse_values)) if recon_mse_values.size > 0 else 0.0
-        else:
-            metrics["PRICE_MSE"] = float(np.mean(recon_mse_values)) if recon_mse_values.size > 0 else 0.0
+        metrics["PRICE_MSE"] = float(np.mean(recon_mse_values)) if recon_mse_values.size > 0 else 0.0
         metrics["PRECISION@10"] = 0.0
         metrics["SR"] = 0.0
 
@@ -1114,7 +1090,7 @@ class DynamicSingleVQVAETrainer():
                 save_json(count, os.path.join(self.exp_path, f"count.json"))
 
     def train(self):
-        self.logger.info("| Start training and evaluating VAE...")
+        self.logger.info("| Start training VAE with train/valid only...")
 
         if self.best_metric_mode == "min":
             best_metric_value = float("inf")
@@ -1126,7 +1102,6 @@ class DynamicSingleVQVAETrainer():
         for epoch in range(self.start_epoch, self.num_training_epochs + 1):
             train_stats = self.run_step(epoch, mode="train")
             valid_stats = self.run_step(epoch, mode="valid")
-            test_stats = self.run_test(epoch, mode="test")
 
             if self.best_metric not in valid_stats:
                 raise KeyError(
@@ -1138,7 +1113,6 @@ class DynamicSingleVQVAETrainer():
             log_stats = {"epoch": epoch}
             log_stats.update({f"train_{k}": v for k, v in train_stats.items()})
             log_stats.update({f"valid_{k}": v for k, v in valid_stats.items()})
-            log_stats.update({f"test_{k}": v for k, v in test_stats.items()})
 
             if self.is_main_process:
                 with open(os.path.join(self.exp_path, "train_log.txt"), "a", ) as f:

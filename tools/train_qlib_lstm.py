@@ -111,9 +111,9 @@ def _predict_segment(model, dataset, segment):
     return pred_series
 
 
-def _evaluate(model, dataset, qlib_df, config, exp_path):
+def _evaluate(model, dataset, qlib_df, config, exp_path, splits=("train", "valid", "test")):
     stats = {}
-    for split in ["train", "valid", "test"]:
+    for split in splits:
         pred = _predict_segment(model, dataset, split)
         label_df = _segment_label_frame(qlib_df, config, split)
         metrics = calc_prediction_metrics(label_df, pred, label_column=config.label_column)
@@ -153,10 +153,10 @@ def main(args):
         save_joblib(model, model_path)
         logger.info(f"| Saved Qlib LSTM model: {model_path}")
 
-        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path)
+        stats = _evaluate(model, dataset, raw_qlib_df, config, config.exp_path, splits=("train", "valid"))
         with open(os.path.join(config.exp_path, "train_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
-        logger.info(f"| Qlib LSTM train/test stats: {stats}")
+        logger.info(f"| Qlib LSTM train/valid stats: {stats}")
 
     if args.test:
         ckpt = args.checkpoint_path_override or model_path

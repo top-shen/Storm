@@ -242,12 +242,12 @@ def main(args):
 
         _load_checkpoint(model, optimizer=None, checkpoint_path=model_path, device=device)
         final_stats = {}
-        for split, loader in [("train", train_eval_loader), ("valid", valid_loader), ("test", test_loader)]:
+        for split, loader in [("train", train_eval_loader), ("valid", valid_loader)]:
             metrics = _evaluate(model, loader, device, config.label_column, save_path=os.path.join(config.exp_path, f"{split}_predictions.joblib"))
             final_stats.update({f"{split}_{key}": value for key, value in _paper_metrics(metrics).items()})
         with open(os.path.join(config.exp_path, "best_metrics.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(final_stats) + "\n")
-        logger.info(f"| STORM Transformer train/best stats: {final_stats}")
+        logger.info(f"| STORM Transformer train/valid best stats: {final_stats}")
 
     if args.test:
         ckpt = args.checkpoint_path_override or model_path

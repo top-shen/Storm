@@ -460,7 +460,7 @@ class VAETrainer():
 
     def train(self):
 
-        self.logger.info("| Start training and evaluating VAE...")
+        self.logger.info("| Start training VAE with train/valid only...")
 
         min_metric = float("inf")
 

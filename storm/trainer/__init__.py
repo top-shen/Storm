@@ -5,6 +5,7 @@ from .dual_vqvae_trainer import DualVQVAETrainer
 from .single_vqvae_trainer import SingleVQVAETrainer
 from .dynamic_dual_vqvae_trainer import DynamicDualVQVAETrainer
 from .dynamic_single_vqvae_trainer import DynamicSingleVQVAETrainer
+from .dynamic_single_vqvae_two_stage_trainer import DynamicSingleVQVAETwoStageTrainer
 from .ppo_trainer import PPOTrainer
 from .offline_ppo_trainer import OfflinePPOTrainer
 from .dpo_trainer import DPOTrainer

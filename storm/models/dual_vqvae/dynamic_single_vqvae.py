@@ -15,11 +15,13 @@ from storm.models.modules.distribution import DiagonalGaussianDistribution
 
 
 class FactorStockMixer(nn.Module):
-    """Lightweight cross-sectional mixer over the stock dimension.
+    """Lightweight cross-sectional mixer over stock-level representations.
 
     Factors are ordered as time-major patch tokens: [B, T_patch * S, D].
-    The module reshapes them to [B, T_patch, S, D], mixes only the stock
-    dimension S through a low-rank market bottleneck, then restores shape.
+    The mixer first aggregates the window's patch tokens into one representation
+    per stock [B, S, D], applies the StockMixer-style bottleneck
+    S -> market_dim -> S, and broadcasts the learned market residual back to
+    every patch token of the same stock.
     """
 
     def __init__(
@@ -28,11 +30,13 @@ class FactorStockMixer(nn.Module):
         market_dim: int = 8,
         dropout: float = 0.1,
         residual_scale: float = 0.1,
+        aggregation: str = "mean",
     ):
         super().__init__()
         self.stock_num = int(stock_num)
         self.market_dim = int(market_dim)
         self.residual_scale = float(residual_scale)
+        self.aggregation = aggregation
 
         self.layer_norm_stock = nn.LayerNorm(self.stock_num)
         self.stock_to_market = nn.Linear(self.stock_num, self.market_dim)
@@ -54,15 +58,25 @@ class FactorStockMixer(nn.Module):
             )
 
         time_patch_num = token_num // self.stock_num
-        x = factors.reshape(batch_size, time_patch_num, self.stock_num, latent_dim)
-        x = x.permute(0, 1, 3, 2)  # [B, T_patch, D, S]
-        x = self.layer_norm_stock(x)
-        x = self.stock_to_market(x)
-        x = self.activation(x)
-        x = self.market_to_stock(x)
-        x = x.permute(0, 1, 3, 2).reshape(batch_size, token_num, latent_dim)
+        stock_tokens = factors.reshape(batch_size, time_patch_num, self.stock_num, latent_dim)
 
-        return factors + self.residual_scale * self.dropout(x)
+        if self.aggregation == "mean":
+            stock_repr = stock_tokens.mean(dim=1)
+        elif self.aggregation == "last":
+            stock_repr = stock_tokens[:, -1]
+        else:
+            raise ValueError(f"Unsupported stock mixing aggregation: {self.aggregation}")
+
+        market_signal = stock_repr.permute(0, 2, 1)  # [B, D, S]
+        market_signal = self.layer_norm_stock(market_signal)
+        market_signal = self.stock_to_market(market_signal)
+        market_signal = self.activation(market_signal)
+        market_signal = self.market_to_stock(market_signal)
+        market_signal = market_signal.permute(0, 2, 1)  # [B, S, D]
+        market_signal = market_signal.unsqueeze(1).expand_as(stock_tokens)
+        market_signal = market_signal.reshape(batch_size, token_num, latent_dim)
+
+        return factors + self.residual_scale * self.dropout(market_signal)
 
 
 @MODEL.register_module(force=True)
@@ -76,6 +90,7 @@ class DynamicSingleVQVAE(nn.Module):
                  stock_mixing_market_dim: int = 8,
                  stock_mixing_dropout: float = 0.1,
                  stock_mixing_residual_scale: float = 0.1,
+                 stock_mixing_aggregation: str = "mean",
                  ):
         super(DynamicSingleVQVAE, self).__init__()
 
@@ -102,6 +117,7 @@ class DynamicSingleVQVAE(nn.Module):
             market_dim=stock_mixing_market_dim,
             dropout=stock_mixing_dropout,
             residual_scale=stock_mixing_residual_scale,
+            aggregation=stock_mixing_aggregation,
         ) if self.use_stock_mixing else nn.Identity()
 
         # to post distribution encode latent

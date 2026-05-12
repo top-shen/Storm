@@ -14,6 +14,7 @@ class SingleVQVAELoss(nn.Module):
                  nll_reduction = "sum_per_sample",
                  ranking_loss_weight = 0.0,
                  ic_loss_weight = 0.0,
+                 ranking_loss_type = "softplus",
                  rank_temperature = 0.01,
                  rank_label_eps = 1e-8,
                  ic_eps = 1e-8):
@@ -25,6 +26,7 @@ class SingleVQVAELoss(nn.Module):
         self.nll_reduction = nll_reduction
         self.ranking_loss_weight = ranking_loss_weight
         self.ic_loss_weight = ic_loss_weight
+        self.ranking_loss_type = ranking_loss_type
         self.rank_temperature = rank_temperature
         self.rank_label_eps = rank_label_eps
         self.ic_eps = ic_eps
@@ -34,7 +36,8 @@ class SingleVQVAELoss(nn.Module):
             f"SingleVAELoss(cs_scale = {self.cs_scale}, nll_loss_weight={self.nll_loss_weight}, "
             f"ret_loss_weight={self.ret_loss_weight}, kl_loss_weight={self.kl_loss_weight}, "
             f"nll_reduction={self.nll_reduction}, ranking_loss_weight={self.ranking_loss_weight}, "
-            f"ic_loss_weight={self.ic_loss_weight}, rank_temperature={self.rank_temperature})"
+            f"ic_loss_weight={self.ic_loss_weight}, ranking_loss_type={self.ranking_loss_type}, "
+            f"rank_temperature={self.rank_temperature})"
         )
 
     def _pairwise_ranking_loss(self, pred_label: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
@@ -58,6 +61,33 @@ class SingleVQVAELoss(nn.Module):
         temperature = max(float(self.rank_temperature), self.ic_eps)
         pair_losses = F.softplus(-label_sign * pred_diff / temperature)
         return pair_losses[pair_mask].mean()
+
+    def _stockmixer_pairwise_ranking_loss(self, pred_label: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        pred_label = pred_label.reshape(pred_label.shape[0], -1)
+        label = label.reshape(label.shape[0], -1)
+
+        pred_diff = pred_label.unsqueeze(-1) - pred_label.unsqueeze(-2)
+        label_diff = label.unsqueeze(-1) - label.unsqueeze(-2)
+
+        num_assets = label.shape[-1]
+        pair_mask = torch.triu(
+            torch.ones(num_assets, num_assets, dtype=torch.bool, device=label.device),
+            diagonal=1,
+        )
+        pair_mask = pair_mask.unsqueeze(0) & (label_diff.abs() > self.rank_label_eps)
+
+        if not torch.any(pair_mask):
+            return pred_label.new_zeros(())
+
+        pair_losses = F.relu(-pred_diff * label_diff)
+        return pair_losses[pair_mask].mean()
+
+    def _ranking_loss(self, pred_label: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        if self.ranking_loss_type in (None, "softplus"):
+            return self._pairwise_ranking_loss(pred_label, label)
+        if self.ranking_loss_type == "stockmixer_pairwise":
+            return self._stockmixer_pairwise_ranking_loss(pred_label, label)
+        raise ValueError(f"Unsupported ranking_loss_type: {self.ranking_loss_type}")
 
     def _ic_loss(self, pred_label: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         pred_label = pred_label.reshape(pred_label.shape[0], -1)
@@ -148,7 +178,7 @@ class SingleVQVAELoss(nn.Module):
             ranking_loss = pred_label.new_zeros(())
             weighted_ranking_loss = pred_label.new_zeros(())
         else:
-            ranking_loss = self._pairwise_ranking_loss(pred_label, label)
+            ranking_loss = self._ranking_loss(pred_label, label)
             weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
 
         if self.ic_loss_weight is None or self.ic_loss_weight == 0:

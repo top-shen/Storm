@@ -2,6 +2,7 @@ import os
 import json
 import random
 import torch
+from glob import glob
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -80,8 +81,50 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
         self.plot_path = os.path.join(self.exp_path, "plot")
         os.makedirs(self.plot_path, exist_ok=True)
 
+        self.two_stage_vqvae_epochs = int(getattr(self.config, "two_stage_vqvae_epochs", 120))
+        self.stage1_min_epochs = int(getattr(self.config, "stage1_min_epochs", max(1, self.two_stage_vqvae_epochs // 2)))
+        self.stage1_patience = int(getattr(self.config, "stage1_patience", 30))
+        self.stage1_monitor = getattr(self.config, "stage1_monitor", "price_mse")
+        self.stage1_monitor_mode = getattr(self.config, "stage1_monitor_mode", "min")
+        self.stage1_min_delta = float(getattr(self.config, "stage1_min_delta", 0.0))
+        self.stage2_min_epochs = int(getattr(self.config, "stage2_min_epochs", 45))
+        self.stage2_patience = int(getattr(self.config, "stage2_patience", 35))
+        self.stage2_monitor = getattr(self.config, "stage2_monitor", self.best_metric)
+        self.stage2_monitor_mode = getattr(self.config, "stage2_monitor_mode", self.best_metric_mode)
+        self.stage2_min_delta = float(getattr(self.config, "stage2_min_delta", 0.0))
+        self.reset_optimizer_on_stage_switch = bool(getattr(self.config, "reset_optimizer_on_stage_switch", True))
+        self.two_stage_resume_model_only = bool(getattr(self.config, "two_stage_resume_model_only", True))
+        self.stage1_lr = float(getattr(self.config, "stage1_lr", getattr(self.config, "vae_lr", 1e-4)))
+        self.stage1_weight_decay = float(getattr(
+            self.config,
+            "stage1_weight_decay",
+            getattr(self.config, "vae_weight_decay", 0.05),
+        ))
+        self.stage1_betas = tuple(getattr(self.config, "stage1_betas", getattr(self.config, "vae_betas", (0.9, 0.95))))
+        self.stage1_scheduler_type = getattr(self.config, "stage1_scheduler_type", "CosineWithWarmupScheduler")
+        self.stage1_warmup_epochs = int(getattr(self.config, "stage1_warmup_epochs", 12))
+        self.stage2_lr = float(getattr(self.config, "stage2_lr", 3e-5))
+        self.stage2_weight_decay = float(getattr(self.config, "stage2_weight_decay", 0.01))
+        self.stage2_betas = tuple(getattr(self.config, "stage2_betas", getattr(self.config, "vae_betas", (0.9, 0.95))))
+        self.stage2_scheduler_type = getattr(self.config, "stage2_scheduler_type", "CosineWithWarmupScheduler")
+        self.stage2_warmup_epochs = int(getattr(self.config, "stage2_warmup_epochs", 8))
+
+        loaded_full_optimizer_state = False
         if self.resume:
-            self.start_epoch = self.load_checkpoint() + 1
+            if self.two_stage_resume_model_only:
+                self.start_epoch = self._load_latest_model_state_only() + 1
+            else:
+                try:
+                    self.start_epoch = self.load_checkpoint() + 1
+                    loaded_full_optimizer_state = True
+                except ValueError as exc:
+                    if "parameter group" not in str(exc):
+                        raise
+                    self.logger.warning(
+                        "| Full optimizer resume failed because the optimizer parameter groups changed. "
+                        "Fallback to model-only resume for two-stage training."
+                    )
+                    self.start_epoch = self._load_latest_model_state_only() + 1
         else:
             self.start_epoch = 1
             self.logger.info("| Resume disabled. Start training from epoch 1 without loading the latest checkpoint.")
@@ -92,45 +135,31 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
         self.global_valid_step = 0
         self.global_test_step = 0
 
-        self.two_stage_vqvae_epochs = int(getattr(self.config, "two_stage_vqvae_epochs", 80))
-        self.stage1_min_epochs = int(getattr(self.config, "stage1_min_epochs", max(1, self.two_stage_vqvae_epochs // 2)))
-        self.stage1_patience = int(getattr(self.config, "stage1_patience", 20))
-        self.stage1_monitor = getattr(self.config, "stage1_monitor", "price_mse")
-        self.stage1_monitor_mode = getattr(self.config, "stage1_monitor_mode", "min")
-        self.stage2_min_epochs = int(getattr(self.config, "stage2_min_epochs", 30))
-        self.stage2_patience = int(getattr(self.config, "stage2_patience", 25))
-        self.stage2_monitor = getattr(self.config, "stage2_monitor", self.best_metric)
-        self.stage2_monitor_mode = getattr(self.config, "stage2_monitor_mode", self.best_metric_mode)
-        self.reset_optimizer_on_stage_switch = bool(getattr(self.config, "reset_optimizer_on_stage_switch", True))
-        self.stage1_lr = float(getattr(self.config, "stage1_lr", getattr(self.config, "vae_lr", 1e-4)))
-        self.stage1_weight_decay = float(getattr(
-            self.config,
-            "stage1_weight_decay",
-            getattr(self.config, "vae_weight_decay", 0.05),
-        ))
-        self.stage1_betas = tuple(getattr(self.config, "stage1_betas", getattr(self.config, "vae_betas", (0.9, 0.95))))
-        self.stage1_scheduler_type = getattr(self.config, "stage1_scheduler_type", "CosineWithWarmupScheduler")
-        self.stage1_warmup_epochs = int(getattr(self.config, "stage1_warmup_epochs", 8))
-        self.stage2_lr = float(getattr(self.config, "stage2_lr", 5e-5))
-        self.stage2_weight_decay = float(getattr(self.config, "stage2_weight_decay", 0.01))
-        self.stage2_betas = tuple(getattr(self.config, "stage2_betas", getattr(self.config, "vae_betas", (0.9, 0.95))))
-        self.stage2_scheduler_type = getattr(self.config, "stage2_scheduler_type", "CosineWithWarmupScheduler")
-        self.stage2_warmup_epochs = int(getattr(self.config, "stage2_warmup_epochs", 5))
         self.logger.info(
             "| Two-stage schedule: "
             f"stage1(VQ-VAE representation)<= {self.two_stage_vqvae_epochs} epochs, "
             f"monitor={self.stage1_monitor}/{self.stage1_monitor_mode}, "
-            f"min_epochs={self.stage1_min_epochs}, patience={self.stage1_patience}; "
+            f"min_epochs={self.stage1_min_epochs}, patience={self.stage1_patience}, "
+            f"min_delta={self.stage1_min_delta}; "
             f"stage2(return prediction) monitor={self.stage2_monitor}/{self.stage2_monitor_mode}, "
-            f"min_epochs={self.stage2_min_epochs}, patience={self.stage2_patience}; "
+            f"min_epochs={self.stage2_min_epochs}, patience={self.stage2_patience}, "
+            f"min_delta={self.stage2_min_delta}; "
             f"stage1_lr={self.stage1_lr}, stage2_lr={self.stage2_lr}, "
-            f"reset_optimizer_on_stage_switch={self.reset_optimizer_on_stage_switch}"
+            f"reset_optimizer_on_stage_switch={self.reset_optimizer_on_stage_switch}, "
+            f"resume_model_only={self.two_stage_resume_model_only}"
         )
-        if self.reset_optimizer_on_stage_switch and not self.resume:
+        if self.reset_optimizer_on_stage_switch and not loaded_full_optimizer_state:
+            initial_stage = self._stage_for_epoch(self.start_epoch)
+            total_epochs = (
+                max(1, self.two_stage_vqvae_epochs - self.start_epoch + 1)
+                if initial_stage == "vqvae"
+                else max(1, self.num_training_epochs - self.start_epoch + 1)
+            )
+            warmup_epochs = self.stage1_warmup_epochs if initial_stage == "vqvae" else self.stage2_warmup_epochs
             self._reset_stage_optimizer(
-                stage="vqvae",
-                total_epochs=max(1, self.two_stage_vqvae_epochs),
-                warmup_epochs=self.stage1_warmup_epochs,
+                stage=initial_stage,
+                total_epochs=total_epochs,
+                warmup_epochs=warmup_epochs,
             )
 
     def _stage_for_epoch(self, epoch: int) -> str:
@@ -147,11 +176,11 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
         raise ValueError(f"Unsupported monitor mode: {mode}")
 
     @staticmethod
-    def _is_better(metric: float, best_metric: float, mode: str) -> bool:
+    def _is_better(metric: float, best_metric: float, mode: str, min_delta: float = 0.0) -> bool:
         if mode == "min":
-            return metric < best_metric
+            return metric < best_metric - min_delta
         if mode == "max":
-            return metric > best_metric
+            return metric > best_metric + min_delta
         raise ValueError(f"Unsupported monitor mode: {mode}")
 
     def _save_named_checkpoint(self, epoch: int, filename: str):
@@ -172,10 +201,27 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
         checkpoint_file = os.path.join(self.checkpoint_path, filename)
         if not os.path.exists(checkpoint_file):
             raise FileNotFoundError(f"Two-stage checkpoint not found: {checkpoint_file}")
+        return self._load_model_state_only_from_file(checkpoint_file)
+
+    def _latest_checkpoint_file(self):
+        checkpoint_files = glob(os.path.join(self.checkpoint_path, "checkpoint_*.pth"))
+        if not checkpoint_files:
+            return None
+        return sorted(checkpoint_files, key=lambda x: int(x.split("_")[-1].split(".")[0]))[-1]
+
+    def _load_latest_model_state_only(self) -> int:
+        checkpoint_file = self._latest_checkpoint_file()
+        if checkpoint_file is None:
+            self.logger.info(f"| No checkpoint found in {self.checkpoint_path}.")
+            return 0
+        return self._load_model_state_only_from_file(checkpoint_file)
+
+    def _load_model_state_only_from_file(self, checkpoint_file: str) -> int:
         self.logger.info(f"| Load model weights only: {checkpoint_file}")
         state = torch.load(checkpoint_file, map_location=self.device)
         self.accelerator.unwrap_model(self.model).load_state_dict(state["model_state"])
-        self.accelerator.unwrap_model(self.model_ema).load_state_dict(state["model_ema_state"])
+        if "model_ema_state" in state:
+            self.accelerator.unwrap_model(self.model_ema).load_state_dict(state["model_ema_state"])
         return int(state["epoch"])
 
     def _unwrap_model(self, model=None):
@@ -635,7 +681,12 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     )
                 stage1_epochs_seen += 1
                 metric = valid_stats[self.stage1_monitor]
-                if self._is_better(metric, stage1_best_value, self.stage1_monitor_mode):
+                if self._is_better(
+                    metric,
+                    stage1_best_value,
+                    self.stage1_monitor_mode,
+                    min_delta=self.stage1_min_delta,
+                ):
                     stage1_best_value = metric
                     stage1_bad_epochs = 0
                     stage1_best_epoch = epoch
@@ -675,7 +726,12 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                 )
             stage2_epochs_seen += 1
             metric = valid_stats[self.stage2_monitor]
-            is_best = self._is_better(metric, stage2_best_value, self.stage2_monitor_mode)
+            is_best = self._is_better(
+                metric,
+                stage2_best_value,
+                self.stage2_monitor_mode,
+                min_delta=self.stage2_min_delta,
+            )
 
             if is_best:
                 stage2_best_value = metric

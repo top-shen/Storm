@@ -1,15 +1,12 @@
 _base_ = [
-    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb256.py"
+    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb128_feature_concat_stockmix.py"
 ]
 
-tag = "single_vqvae_feature_concat_two_stage_256"
+tag = "single_vqvae_feature_concat_stockmix_two_stage_128"
 
-# factors = concat(enc, quantized).
-use_quantized_only_for_factors = False
-vae = dict(use_quantized_only_for_factors=False)
-
-# Stage 1: train VQ-VAE representation only.
-# Stage 2: freeze VQ-VAE and train prior/posterior return prediction.
+# Stage 1 learns a stable VQ-VAE representation/codebook.
+# Stage 2 freezes that representation and trains the prior/posterior predictor
+# with return MSE + StockMixer-style ranking-aware loss from the stockmix base.
 trainer = dict(type="DynamicSingleVQVAETwoStageTrainer")
 two_stage_resume_model_only = True
 two_stage_vqvae_epochs = 120
@@ -20,12 +17,10 @@ stage1_monitor_mode = "min"
 stage1_min_delta = 1e-3
 stage2_min_epochs = 45
 stage2_patience = 35
-stage2_monitor = "ret_mse"
+stage2_monitor = "return_rank_loss"
 stage2_monitor_mode = "min"
 stage2_min_delta = 1e-8
 
-# Rebuild optimizer/scheduler per stage. Stage 1 keeps the representation
-# learning rate; Stage 2 uses a gentler fresh LR for the noisy return head.
 reset_optimizer_on_stage_switch = True
 stage1_lr = 1e-4
 stage1_weight_decay = 0.05
@@ -39,5 +34,5 @@ stage2_scheduler_type = "CosineWithWarmupScheduler"
 stage2_warmup_epochs = 8
 
 use_ema_for_eval = False
-best_metric = "ret_mse"
+best_metric = "return_rank_loss"
 best_metric_mode = "min"

@@ -1,8 +1,11 @@
 _base_ = [
-    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb128_feature_concat.py"
+    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb128.py"
 ]
 
 tag = "single_vqvae_feature_concat_stockmix_128"
+
+# factors = concat(enc, quantized), then stock-level cross-sectional mixing.
+use_quantized_only_for_factors = False
 
 # Stock-representation-level cross-sectional mixing:
 # aggregate patch tokens to one representation per stock, mix 17 stocks through

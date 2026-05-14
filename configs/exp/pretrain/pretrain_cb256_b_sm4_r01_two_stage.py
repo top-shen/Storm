@@ -1,12 +1,19 @@
 _base_ = [
-    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb128_feature_concat_stockmix.py"
+    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb256_feature_concat_stockmix.py"
 ]
 
-tag = "single_vqvae_feature_concat_stockmix_two_stage_128"
+tag = "cb256_b_sm4_r01"
 
-# Stage 1 learns a stable VQ-VAE representation/codebook.
-# Stage 2 freezes that representation and trains the prior/posterior predictor
-# with return MSE + StockMixer-style ranking-aware loss from the stockmix base.
+# B: mean aggregation, market_dim=4, residual_scale=0.1.
+vae = dict(
+    use_quantized_only_for_factors=False,
+    use_stock_mixing=True,
+    stock_mixing_market_dim=4,
+    stock_mixing_dropout=0.05,
+    stock_mixing_residual_scale=0.1,
+    stock_mixing_aggregation="mean",
+)
+
 trainer = dict(type="DynamicSingleVQVAETwoStageTrainer")
 two_stage_resume_model_only = True
 two_stage_vqvae_epochs = 120

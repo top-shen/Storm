@@ -122,6 +122,7 @@ class SingleVQVAELoss(nn.Module):
         prior,
         mask=None,
         if_mask=False,
+        compute_prediction_losses=True,
     ):
         """
         :param sample: (N, L, D)
@@ -160,33 +161,41 @@ class SingleVQVAELoss(nn.Module):
         else:
             raise ValueError(f"Unsupported nll_reduction: {self.nll_reduction}")
 
-        ret_loss = (label - pred_label) ** 2
-        ret_loss = ret_loss.mean(dim=-1)
+        if compute_prediction_losses:
+            ret_loss = (label - pred_label) ** 2
+            ret_loss = ret_loss.mean(dim=-1)
 
-        weighted_ret_loss = ret_loss
-        if self.ret_loss_weight is not None:
-            weighted_ret_loss = self.ret_loss_weight * ret_loss
-        weighted_ret_loss = torch.sum(weighted_ret_loss) / weighted_ret_loss.shape[0]
+            weighted_ret_loss = ret_loss
+            if self.ret_loss_weight is not None:
+                weighted_ret_loss = self.ret_loss_weight * ret_loss
+            weighted_ret_loss = torch.sum(weighted_ret_loss) / weighted_ret_loss.shape[0]
 
-        kl_loss = posterior.kl(prior, dims=[1])
-        weighted_kl_loss = kl_loss
-        if self.kl_loss_weight is not None:
-            weighted_kl_loss = self.kl_loss_weight * kl_loss
-        weighted_kl_loss = torch.sum(weighted_kl_loss) / weighted_kl_loss.shape[0]
+            kl_loss = posterior.kl(prior, dims=[1])
+            weighted_kl_loss = kl_loss
+            if self.kl_loss_weight is not None:
+                weighted_kl_loss = self.kl_loss_weight * kl_loss
+            weighted_kl_loss = torch.sum(weighted_kl_loss) / weighted_kl_loss.shape[0]
 
-        if self.ranking_loss_weight is None or self.ranking_loss_weight == 0:
-            ranking_loss = pred_label.new_zeros(())
-            weighted_ranking_loss = pred_label.new_zeros(())
+            if self.ranking_loss_weight is None or self.ranking_loss_weight == 0:
+                ranking_loss = pred_label.new_zeros(())
+                weighted_ranking_loss = pred_label.new_zeros(())
+            else:
+                ranking_loss = self._ranking_loss(pred_label, label)
+                weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
+
+            if self.ic_loss_weight is None or self.ic_loss_weight == 0:
+                ic_loss = pred_label.new_zeros(())
+                weighted_ic_loss = pred_label.new_zeros(())
+            else:
+                ic_loss = self._ic_loss(pred_label, label)
+                weighted_ic_loss = self.ic_loss_weight * ic_loss
         else:
-            ranking_loss = self._ranking_loss(pred_label, label)
-            weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
-
-        if self.ic_loss_weight is None or self.ic_loss_weight == 0:
-            ic_loss = pred_label.new_zeros(())
-            weighted_ic_loss = pred_label.new_zeros(())
-        else:
-            ic_loss = self._ic_loss(pred_label, label)
-            weighted_ic_loss = self.ic_loss_weight * ic_loss
+            weighted_ret_loss = sample.new_zeros(())
+            weighted_kl_loss = sample.new_zeros(())
+            ranking_loss = sample.new_zeros(())
+            weighted_ranking_loss = sample.new_zeros(())
+            ic_loss = sample.new_zeros(())
+            weighted_ic_loss = sample.new_zeros(())
 
         loss_dict = dict(
             nll_loss=nll_loss,

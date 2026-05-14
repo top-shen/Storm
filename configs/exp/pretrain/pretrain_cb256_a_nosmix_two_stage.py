@@ -1,12 +1,16 @@
 _base_ = [
-    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb128_feature_concat_stockmix.py"
+    "./pretrain_day_dj30_17_dynamic_single_vqvae_time_series_cb256_feature_concat_stockmix.py"
 ]
 
-tag = "single_vqvae_feature_concat_stockmix_two_stage_128"
+tag = "cb256_a_nosmix"
 
-# Stage 1 learns a stable VQ-VAE representation/codebook.
-# Stage 2 freezes that representation and trains the prior/posterior predictor
-# with return MSE + StockMixer-style ranking-aware loss from the stockmix base.
+# A: no stock mixer. Keep concat factors and the same return/ranking objective
+# as the stockmix variants so the ablation isolates the mixer.
+vae = dict(
+    use_quantized_only_for_factors=False,
+    use_stock_mixing=False,
+)
+
 trainer = dict(type="DynamicSingleVQVAETwoStageTrainer")
 two_stage_resume_model_only = True
 two_stage_vqvae_epochs = 120

@@ -284,6 +284,7 @@ class DynamicSingleVQVAE(nn.Module):
                 sample: torch.FloatTensor,
                 label: torch.LongTensor = None,
                 training: bool = True,
+                return_prediction: bool = True,
                 ):
 
         encoder_output = self.encode(sample)
@@ -298,31 +299,34 @@ class DynamicSingleVQVAE(nn.Module):
         weighted_codebook_diversity_loss = encoder_output["weighted_codebook_diversity_loss"]
         weighted_orthogonal_reg_loss = encoder_output["weighted_orthogonal_reg_loss"]
 
-        if self.use_quantized_only_for_factors:
-            factors = quantized
-        else:
-            factors = torch.concat([enc, quantized], dim=-1)
+        factors = None
+        pred_label = None
+        posterior = None
+        prior = None
+        if return_prediction:
+            if self.use_quantized_only_for_factors:
+                factors = quantized
+            else:
+                factors = torch.concat([enc, quantized], dim=-1)
 
-        factors = self.stock_mixer(factors)
+            factors = self.stock_mixer(factors)
 
-        posterior = self.encode_post_distribution(factors, label)
-        mu_post, sigma_post = posterior.mean, posterior.std
-        prior = self.encode_prior_distribution(factors)
-        mu_prior, sigma_prior = prior.mean, prior.std
+            posterior = self.encode_post_distribution(factors, label)
+            mu_post, sigma_post = posterior.mean, posterior.std
+            prior = self.encode_prior_distribution(factors)
+            mu_prior, sigma_prior = prior.mean, prior.std
 
-        if training:
-            pred_label = self.decode_post_distribution(factors, mu_post, sigma_post)
+            if training:
+                pred_label = self.decode_post_distribution(factors, mu_post, sigma_post)
+            else:
+                pred_label = self.decode_post_distribution(
+                    factors,
+                    mu_prior,
+                    sigma_prior,
+                    sample_from_distribution=False,
+                )
 
-            decoder_output = self.decode(quantized, id_restore)
-        else:
-            pred_label = self.decode_post_distribution(
-                factors,
-                mu_prior,
-                sigma_prior,
-                sample_from_distribution=False,
-            )
-
-            decoder_output = self.decode(quantized, id_restore)
+        decoder_output = self.decode(quantized, id_restore)
 
         recon = decoder_output["recon"]
 

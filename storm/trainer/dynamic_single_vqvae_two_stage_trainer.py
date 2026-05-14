@@ -422,11 +422,12 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
 
             labels = labels[:, :, -1:, :, 0]
 
+            return_prediction = stage != "vqvae"
             if if_train:
-                output = active_model(features, labels, training=True)
+                output = active_model(features, labels, training=True, return_prediction=return_prediction)
             else:
                 with torch.no_grad():
-                    output = active_model(features, labels, training=False)
+                    output = active_model(features, labels, training=False, return_prediction=return_prediction)
 
             pred_recon = output["recon"]
             (
@@ -483,6 +484,8 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
 
             weighted_ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
             weighted_ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+            ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+            ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
 
             if self.vae_loss_fn:
                 loss_dict = self.vae_loss_fn(
@@ -494,6 +497,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     prior=prior,
                     mask=mask,
                     if_mask=if_mask,
+                    compute_prediction_losses=stage != "vqvae",
                 )
 
                 weighted_nll_loss = loss_dict["weighted_nll_loss"]
@@ -565,12 +569,21 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                 records.update({"mse": mse})
 
             with torch.no_grad():
-                ret_mse = MSE(labels.detach(), pred_label.detach())
-                ic = self._pearson_ic_series(pred_label.detach(), labels.detach()).mean()
-                direction_counts = self._direction_counts(pred_label.detach(), labels.detach())
-                acc, mcc = self._direction_metrics_from_counts(
-                    *(direction_counts[key].item() for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn"))
-                )
+                if pred_label is None:
+                    ret_mse = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+                    ic = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+                    direction_counts = {
+                        key: torch.tensor(0.0, device=self.device, dtype=self.dtype)
+                        for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn")
+                    }
+                    acc, mcc = 0.0, 0.0
+                else:
+                    ret_mse = MSE(labels.detach(), pred_label.detach())
+                    ic = self._pearson_ic_series(pred_label.detach(), labels.detach()).mean()
+                    direction_counts = self._direction_counts(pred_label.detach(), labels.detach())
+                    acc, mcc = self._direction_metrics_from_counts(
+                        *(direction_counts[key].item() for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn"))
+                    )
 
                 records.update({
                     "recon_mse": mse,

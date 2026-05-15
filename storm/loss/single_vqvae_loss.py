@@ -17,7 +17,9 @@ class SingleVQVAELoss(nn.Module):
                  ranking_loss_type = "softplus",
                  rank_temperature = 0.01,
                  rank_label_eps = 1e-8,
-                 ic_eps = 1e-8):
+                 ic_eps = 1e-8,
+                 posterior_loss_weight = 1.0,
+                 prior_loss_weight = 0.0):
         super().__init__()
         self.cs_scale = cs_scale
         self.nll_loss_weight = nll_loss_weight
@@ -30,6 +32,8 @@ class SingleVQVAELoss(nn.Module):
         self.rank_temperature = rank_temperature
         self.rank_label_eps = rank_label_eps
         self.ic_eps = ic_eps
+        self.posterior_loss_weight = posterior_loss_weight
+        self.prior_loss_weight = prior_loss_weight
 
     def __str__(self):
         return (
@@ -37,7 +41,8 @@ class SingleVQVAELoss(nn.Module):
             f"ret_loss_weight={self.ret_loss_weight}, kl_loss_weight={self.kl_loss_weight}, "
             f"nll_reduction={self.nll_reduction}, ranking_loss_weight={self.ranking_loss_weight}, "
             f"ic_loss_weight={self.ic_loss_weight}, ranking_loss_type={self.ranking_loss_type}, "
-            f"rank_temperature={self.rank_temperature})"
+            f"rank_temperature={self.rank_temperature}, posterior_loss_weight={self.posterior_loss_weight}, "
+            f"prior_loss_weight={self.prior_loss_weight})"
         )
 
     def _pairwise_ranking_loss(self, pred_label: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
@@ -123,6 +128,7 @@ class SingleVQVAELoss(nn.Module):
         mask=None,
         if_mask=False,
         compute_prediction_losses=True,
+        pred_label_prior=None,
     ):
         """
         :param sample: (N, L, D)
@@ -161,8 +167,12 @@ class SingleVQVAELoss(nn.Module):
         else:
             raise ValueError(f"Unsupported nll_reduction: {self.nll_reduction}")
 
-        if compute_prediction_losses:
-            ret_loss = (label - pred_label) ** 2
+        def prediction_loss_terms(branch_pred_label):
+            if branch_pred_label is None:
+                zero = sample.new_zeros(())
+                return zero, zero, zero, zero, zero, zero
+
+            ret_loss = (label - branch_pred_label) ** 2
             ret_loss = ret_loss.mean(dim=-1)
 
             weighted_ret_loss = ret_loss
@@ -170,25 +180,56 @@ class SingleVQVAELoss(nn.Module):
                 weighted_ret_loss = self.ret_loss_weight * ret_loss
             weighted_ret_loss = torch.sum(weighted_ret_loss) / weighted_ret_loss.shape[0]
 
+            if self.ranking_loss_weight is None or self.ranking_loss_weight == 0:
+                ranking_loss = branch_pred_label.new_zeros(())
+                weighted_ranking_loss = branch_pred_label.new_zeros(())
+            else:
+                ranking_loss = self._ranking_loss(branch_pred_label, label)
+                weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
+
+            if self.ic_loss_weight is None or self.ic_loss_weight == 0:
+                ic_loss = branch_pred_label.new_zeros(())
+                weighted_ic_loss = branch_pred_label.new_zeros(())
+            else:
+                ic_loss = self._ic_loss(branch_pred_label, label)
+                weighted_ic_loss = self.ic_loss_weight * ic_loss
+
+            return ret_loss.mean(), weighted_ret_loss, ranking_loss, weighted_ranking_loss, ic_loss, weighted_ic_loss
+
+        if compute_prediction_losses:
+            (
+                ret_loss,
+                weighted_ret_loss,
+                ranking_loss,
+                weighted_ranking_loss,
+                ic_loss,
+                weighted_ic_loss,
+            ) = prediction_loss_terms(pred_label)
+
+            posterior_weight = float(self.posterior_loss_weight)
+            weighted_ret_loss = posterior_weight * weighted_ret_loss
+            weighted_ranking_loss = posterior_weight * weighted_ranking_loss
+            weighted_ic_loss = posterior_weight * weighted_ic_loss
+
+            (
+                prior_ret_loss,
+                weighted_prior_ret_loss,
+                prior_ranking_loss,
+                weighted_prior_ranking_loss,
+                prior_ic_loss,
+                weighted_prior_ic_loss,
+            ) = prediction_loss_terms(pred_label_prior)
+
+            prior_weight = float(self.prior_loss_weight)
+            weighted_prior_ret_loss = prior_weight * weighted_prior_ret_loss
+            weighted_prior_ranking_loss = prior_weight * weighted_prior_ranking_loss
+            weighted_prior_ic_loss = prior_weight * weighted_prior_ic_loss
+
             kl_loss = posterior.kl(prior, dims=[1])
             weighted_kl_loss = kl_loss
             if self.kl_loss_weight is not None:
                 weighted_kl_loss = self.kl_loss_weight * kl_loss
             weighted_kl_loss = torch.sum(weighted_kl_loss) / weighted_kl_loss.shape[0]
-
-            if self.ranking_loss_weight is None or self.ranking_loss_weight == 0:
-                ranking_loss = pred_label.new_zeros(())
-                weighted_ranking_loss = pred_label.new_zeros(())
-            else:
-                ranking_loss = self._ranking_loss(pred_label, label)
-                weighted_ranking_loss = self.ranking_loss_weight * ranking_loss
-
-            if self.ic_loss_weight is None or self.ic_loss_weight == 0:
-                ic_loss = pred_label.new_zeros(())
-                weighted_ic_loss = pred_label.new_zeros(())
-            else:
-                ic_loss = self._ic_loss(pred_label, label)
-                weighted_ic_loss = self.ic_loss_weight * ic_loss
         else:
             weighted_ret_loss = sample.new_zeros(())
             weighted_kl_loss = sample.new_zeros(())
@@ -196,6 +237,12 @@ class SingleVQVAELoss(nn.Module):
             weighted_ranking_loss = sample.new_zeros(())
             ic_loss = sample.new_zeros(())
             weighted_ic_loss = sample.new_zeros(())
+            prior_ret_loss = sample.new_zeros(())
+            weighted_prior_ret_loss = sample.new_zeros(())
+            prior_ranking_loss = sample.new_zeros(())
+            weighted_prior_ranking_loss = sample.new_zeros(())
+            prior_ic_loss = sample.new_zeros(())
+            weighted_prior_ic_loss = sample.new_zeros(())
 
         loss_dict = dict(
             nll_loss=nll_loss,
@@ -206,6 +253,12 @@ class SingleVQVAELoss(nn.Module):
             weighted_ranking_loss=weighted_ranking_loss,
             ic_loss=ic_loss,
             weighted_ic_loss=weighted_ic_loss,
+            prior_ret_loss=prior_ret_loss,
+            weighted_prior_ret_loss=weighted_prior_ret_loss,
+            prior_ranking_loss=prior_ranking_loss,
+            weighted_prior_ranking_loss=weighted_prior_ranking_loss,
+            prior_ic_loss=prior_ic_loss,
+            weighted_prior_ic_loss=weighted_prior_ic_loss,
         )
 
         return loss_dict

@@ -92,6 +92,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
         self.stage2_monitor = getattr(self.config, "stage2_monitor", self.best_metric)
         self.stage2_monitor_mode = getattr(self.config, "stage2_monitor_mode", self.best_metric_mode)
         self.stage2_min_delta = float(getattr(self.config, "stage2_min_delta", 0.0))
+        self.stage2_metric_prediction = getattr(self.config, "stage2_metric_prediction", "default")
         self.reset_optimizer_on_stage_switch = bool(getattr(self.config, "reset_optimizer_on_stage_switch", True))
         self.two_stage_resume_model_only = bool(getattr(self.config, "two_stage_resume_model_only", True))
         self.stage1_lr = float(getattr(self.config, "stage1_lr", getattr(self.config, "vae_lr", 1e-4)))
@@ -478,6 +479,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
 
             mask = output["mask"]
             pred_label = output["pred_label"]
+            pred_label_prior = output.get("pred_label_prior", None)
             posterior = output["posterior"]
             prior = output["prior"]
             labels = labels.squeeze(1).squeeze(1)
@@ -486,6 +488,9 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
             weighted_ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
             ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
             ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+            weighted_prior_ret_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+            weighted_prior_ranking_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+            weighted_prior_ic_loss = torch.tensor(0.0, device=self.device, dtype=self.dtype)
 
             if self.vae_loss_fn:
                 loss_dict = self.vae_loss_fn(
@@ -498,6 +503,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     mask=mask,
                     if_mask=if_mask,
                     compute_prediction_losses=stage != "vqvae",
+                    pred_label_prior=pred_label_prior,
                 )
 
                 weighted_nll_loss = loss_dict["weighted_nll_loss"]
@@ -519,6 +525,26 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     "weighted_ic_loss",
                     torch.tensor(0.0, device=self.device, dtype=self.dtype),
                 )
+                weighted_prior_ret_loss = loss_dict.get(
+                    "weighted_prior_ret_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                prior_ranking_loss = loss_dict.get(
+                    "prior_ranking_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                weighted_prior_ranking_loss = loss_dict.get(
+                    "weighted_prior_ranking_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                prior_ic_loss = loss_dict.get(
+                    "prior_ic_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
+                weighted_prior_ic_loss = loss_dict.get(
+                    "weighted_prior_ic_loss",
+                    torch.tensor(0.0, device=self.device, dtype=self.dtype),
+                )
 
                 records.update({
                     "weighted_nll_loss": weighted_nll_loss,
@@ -528,12 +554,26 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     "weighted_ranking_loss": weighted_ranking_loss,
                     "ic_loss": ic_loss,
                     "weighted_ic_loss": weighted_ic_loss,
+                    "weighted_prior_ret_loss": weighted_prior_ret_loss,
+                    "prior_ranking_loss": prior_ranking_loss,
+                    "weighted_prior_ranking_loss": weighted_prior_ranking_loss,
+                    "prior_ic_loss": prior_ic_loss,
+                    "weighted_prior_ic_loss": weighted_prior_ic_loss,
                 })
 
                 if stage == "vqvae":
                     loss = loss + weighted_quantized_loss + weighted_nll_loss
                 else:
-                    loss = loss + weighted_kl_loss + weighted_ret_loss + weighted_ranking_loss + weighted_ic_loss
+                    loss = (
+                        loss
+                        + weighted_kl_loss
+                        + weighted_ret_loss
+                        + weighted_ranking_loss
+                        + weighted_ic_loss
+                        + weighted_prior_ret_loss
+                        + weighted_prior_ranking_loss
+                        + weighted_prior_ic_loss
+                    )
             else:
                 if stage == "vqvae":
                     loss = loss + weighted_quantized_loss
@@ -569,7 +609,17 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                 records.update({"mse": mse})
 
             with torch.no_grad():
-                if pred_label is None:
+                metric_pred_label = pred_label
+                metric_weighted_ranking_loss = weighted_ranking_loss
+                if (
+                    stage == "predict"
+                    and self.stage2_metric_prediction == "prior"
+                    and pred_label_prior is not None
+                ):
+                    metric_pred_label = pred_label_prior
+                    metric_weighted_ranking_loss = weighted_prior_ranking_loss
+
+                if metric_pred_label is None:
                     ret_mse = torch.tensor(0.0, device=self.device, dtype=self.dtype)
                     ic = torch.tensor(0.0, device=self.device, dtype=self.dtype)
                     direction_counts = {
@@ -578,9 +628,9 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     }
                     acc, mcc = 0.0, 0.0
                 else:
-                    ret_mse = MSE(labels.detach(), pred_label.detach())
-                    ic = self._pearson_ic_series(pred_label.detach(), labels.detach()).mean()
-                    direction_counts = self._direction_counts(pred_label.detach(), labels.detach())
+                    ret_mse = MSE(labels.detach(), metric_pred_label.detach())
+                    ic = self._pearson_ic_series(metric_pred_label.detach(), labels.detach()).mean()
+                    direction_counts = self._direction_counts(metric_pred_label.detach(), labels.detach())
                     acc, mcc = self._direction_metrics_from_counts(
                         *(direction_counts[key].item() for key in ("direction_tp", "direction_tn", "direction_fp", "direction_fn"))
                     )
@@ -588,7 +638,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                 records.update({
                     "recon_mse": mse,
                     "ret_mse": ret_mse,
-                    "return_rank_loss": ret_mse + weighted_ranking_loss.detach(),
+                    "return_rank_loss": ret_mse + metric_weighted_ranking_loss.detach(),
                     "ic": ic,
                     **direction_counts,
                     "acc": torch.tensor(acc, device=self.device, dtype=self.dtype),

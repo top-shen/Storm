@@ -223,8 +223,11 @@ def main() -> None:
         ("return_rank_loss", "stage2 return + ranking monitor"),
         ("ret_mse", "stage2 return MSE"),
         ("weighted_ret_loss", "stage2 weighted return loss"),
+        ("weighted_prior_ret_loss", "stage2 weighted prior return loss"),
         ("ranking_loss", "stage2 raw ranking loss"),
         ("weighted_ranking_loss", "stage2 weighted ranking loss"),
+        ("prior_ranking_loss", "stage2 raw prior ranking loss"),
+        ("weighted_prior_ranking_loss", "stage2 weighted prior ranking loss"),
         ("weighted_kl_loss", "stage2 weighted KL loss"),
     ]
     stage2_signal_metrics = [

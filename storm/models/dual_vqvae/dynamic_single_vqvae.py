@@ -301,6 +301,8 @@ class DynamicSingleVQVAE(nn.Module):
 
         factors = None
         pred_label = None
+        pred_label_posterior = None
+        pred_label_prior = None
         posterior = None
         prior = None
         if return_prediction:
@@ -317,14 +319,22 @@ class DynamicSingleVQVAE(nn.Module):
             mu_prior, sigma_prior = prior.mean, prior.std
 
             if training:
-                pred_label = self.decode_post_distribution(factors, mu_post, sigma_post)
-            else:
-                pred_label = self.decode_post_distribution(
+                pred_label_posterior = self.decode_post_distribution(factors, mu_post, sigma_post)
+                pred_label_prior = self.decode_post_distribution(
                     factors,
                     mu_prior,
                     sigma_prior,
                     sample_from_distribution=False,
                 )
+                pred_label = pred_label_posterior
+            else:
+                pred_label_prior = self.decode_post_distribution(
+                    factors,
+                    mu_prior,
+                    sigma_prior,
+                    sample_from_distribution=False,
+                )
+                pred_label = pred_label_prior
 
         decoder_output = self.decode(quantized, id_restore)
 
@@ -337,6 +347,8 @@ class DynamicSingleVQVAE(nn.Module):
             mask=mask,
             id_restore=id_restore,
             pred_label=pred_label,
+            pred_label_posterior=pred_label_posterior,
+            pred_label_prior=pred_label_prior,
             posterior=posterior,
             prior=prior,
             weighted_quantized_loss=weighted_quantized_loss,

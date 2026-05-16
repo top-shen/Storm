@@ -1,8 +1,10 @@
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from storm.utils import load_joblib
 
@@ -32,6 +34,17 @@ def _parse_args():
         type=int,
         default=20,
         help="Annotate every N-th timestamp on the x-axis.",
+    )
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Optional test_predictions.joblib path. If omitted, try <state_dir>/test_predictions.joblib.",
+    )
+    parser.add_argument(
+        "--codebook-size",
+        type=int,
+        default=256,
+        help="Codebook size used for the usage distribution plot.",
     )
     return parser.parse_args()
 
@@ -64,6 +77,15 @@ def _pca_2d(x: np.ndarray):
     return coords, explained
 
 
+def _zscore(values: np.ndarray):
+    values = np.asarray(values, dtype=np.float64)
+    mean = np.nanmean(values)
+    std = np.nanstd(values)
+    if not np.isfinite(std) or std <= 0:
+        return np.zeros_like(values, dtype=np.float64)
+    return (values - mean) / std
+
+
 def _plot_pca(timestamps, factors, out_path: Path):
     coords, explained = _pca_2d(factors)
 
@@ -92,6 +114,89 @@ def _plot_pca(timestamps, factors, out_path: Path):
     plt.close(fig)
 
 
+def _load_market_stats(predictions_path: Path, timestamps):
+    if predictions_path is None or not predictions_path.exists():
+        return None
+
+    payload = load_joblib(str(predictions_path))
+    if not all(key in payload for key in ("end_timestamp", "true_label")):
+        return None
+
+    frame = pd.DataFrame(
+        {
+            "timestamp": payload["end_timestamp"],
+            "true_label": payload["true_label"],
+        }
+    )
+    frame["timestamp"] = frame["timestamp"].astype(str)
+    grouped = frame.groupby("timestamp")["true_label"]
+    mean_return = grouped.mean()
+    volatility = grouped.std(ddof=0)
+
+    aligned_mean = np.asarray([mean_return.get(str(ts), np.nan) for ts in timestamps], dtype=np.float64)
+    aligned_vol = np.asarray([volatility.get(str(ts), np.nan) for ts in timestamps], dtype=np.float64)
+
+    if np.all(np.isnan(aligned_mean)) and np.all(np.isnan(aligned_vol)):
+        return None
+
+    return {
+        "mean_return": aligned_mean,
+        "volatility": aligned_vol,
+        "source": str(predictions_path),
+    }
+
+
+def _plot_pca_timeseries(timestamps, factors, out_path: Path, market_stats=None):
+    coords, explained = _pca_2d(factors)
+    x = np.arange(len(timestamps))
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(x, _zscore(coords[:, 0]), color="#2563eb", linewidth=1.8, label="PC1 (z-score)")
+    ax.plot(x, _zscore(coords[:, 1]), color="#7c3aed", linewidth=1.8, label="PC2 (z-score)")
+
+    if market_stats is not None:
+        mean_return = market_stats["mean_return"]
+        volatility = market_stats["volatility"]
+        if not np.all(np.isnan(mean_return)):
+            ax.plot(
+                x,
+                _zscore(mean_return),
+                color="#ef4444",
+                linewidth=1.2,
+                alpha=0.85,
+                label="Market mean return (z-score)",
+            )
+        if not np.all(np.isnan(volatility)):
+            ax.plot(
+                x,
+                _zscore(volatility),
+                color="#f59e0b",
+                linewidth=1.2,
+                alpha=0.85,
+                label="Market volatility (z-score)",
+            )
+
+    ax.axhline(0.0, color="#525252", linewidth=0.8, alpha=0.45)
+    ax.set_title(
+        f"Latent PCA Time Series (PC1 {explained[0] * 100:.2f}%, PC2 {explained[1] * 100:.2f}% var)"
+    )
+    ax.set_ylabel("Standardized value")
+    ax.set_xlabel("Timestamp")
+    ax.grid(True, axis="y", alpha=0.25)
+
+    tick_step = max(1, len(timestamps) // 12)
+    tick_positions = list(range(0, len(timestamps), tick_step))
+    if tick_positions[-1] != len(timestamps) - 1:
+        tick_positions.append(len(timestamps) - 1)
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([timestamps[i] for i in tick_positions], rotation=35, ha="right")
+    ax.legend(loc="upper left", ncol=2, frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=220)
+    plt.close(fig)
+
+
 def _plot_heatmap(timestamps, factors, out_path: Path, max_heatmap_dim: int, annotate_every: int):
     n_dims = min(factors.shape[1], max_heatmap_dim)
     data = factors[:, :n_dims].T
@@ -117,6 +222,108 @@ def _plot_heatmap(timestamps, factors, out_path: Path, max_heatmap_dim: int, ann
     fig.colorbar(im, ax=ax, label="Factor Value")
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def _normalize_count_items(count_obj):
+    if count_obj is None:
+        return {}
+
+    if isinstance(count_obj, dict) and "count" in count_obj:
+        count_obj = count_obj["count"]
+
+    normalized = {}
+    for key, value in dict(count_obj).items():
+        try:
+            idx = int(key)
+        except (TypeError, ValueError):
+            continue
+        normalized[idx] = int(value)
+    return normalized
+
+
+def _load_code_counts(state_obj, state_path: Path):
+    counts = _normalize_count_items(state_obj.get("count"))
+    if counts:
+        return counts
+
+    count_path = state_path.parent / "count.json"
+    if count_path.exists():
+        with count_path.open("r", encoding="utf-8") as f:
+            return _normalize_count_items(json.load(f))
+
+    return {}
+
+
+def _plot_codebook_usage(counts, codebook_size: int, out_path: Path):
+    codebook_size = int(codebook_size)
+    usage = np.zeros(codebook_size, dtype=np.float64)
+    for idx, value in counts.items():
+        if 0 <= idx < codebook_size:
+            usage[idx] = float(value)
+
+    total = usage.sum()
+    percentage = usage / total * 100.0 if total > 0 else usage
+    dead_codes = int(np.sum(usage == 0))
+    used_codes = codebook_size - dead_codes
+
+    x = np.arange(codebook_size)
+    mean_pct = float(np.mean(percentage)) if codebook_size > 0 else 0.0
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    bars = ax.bar(
+        x,
+        percentage,
+        width=0.9,
+        color="#4f63f1",
+        edgecolor="#4f63f1",
+        alpha=0.82,
+        linewidth=0.2,
+        label="Code usage",
+    )
+
+    if np.any(usage == 0):
+        zero_idx = x[usage == 0]
+        ax.scatter(
+            zero_idx,
+            np.zeros_like(zero_idx, dtype=np.float64),
+            s=10,
+            color="#ef4444",
+            marker="x",
+            linewidths=0.8,
+            label="Dead code",
+            zorder=3,
+        )
+
+    ax.axhline(mean_pct, color="#111827", linewidth=1.0, linestyle="--", alpha=0.65, label="Uniform usage")
+    ax.set_title("Distribution of Counts for Codebook Embedding Indices")
+    ax.set_xlabel("Codebook embedding index")
+    ax.set_ylabel("Percentage (%)")
+    ax.set_xlim(-1, codebook_size)
+    ax.grid(True, axis="y", linestyle="--", linewidth=0.6, alpha=0.25)
+
+    max_pct = float(np.max(percentage)) if percentage.size else 0.0
+    ax.set_ylim(0, max(max_pct * 1.18, mean_pct * 3.0, 1e-6))
+
+    text = f"used: {used_codes}/{codebook_size}\ndead: {dead_codes}\ntotal tokens: {int(total):,}"
+    ax.text(
+        0.985,
+        0.96,
+        text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=10,
+        bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="#d1d5db", alpha=0.92),
+    )
+    ax.legend(loc="upper left", frameon=True)
+
+    # Keep a reference so static analyzers do not complain about the bar collection
+    # being unused when this script is run under stricter settings.
+    _ = bars
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=220)
     plt.close(fig)
 
 
@@ -154,8 +361,17 @@ def main():
     state_obj = load_joblib(str(state_path))
     meta = state_obj.get("meta", {})
     timestamps, factors = _extract_factors(state_obj)
+    predictions_path = Path(args.predictions).resolve() if args.predictions else state_path.parent / "test_predictions.joblib"
+    market_stats = _load_market_stats(predictions_path, timestamps)
+    code_counts = _load_code_counts(state_obj, state_path)
 
     _plot_pca(timestamps, factors, outdir / "latent_factors_pca.png")
+    _plot_pca_timeseries(
+        timestamps,
+        factors,
+        outdir / "latent_pca_timeseries_market.png",
+        market_stats=market_stats,
+    )
     _plot_heatmap(
         timestamps,
         factors,
@@ -163,10 +379,20 @@ def main():
         max_heatmap_dim=args.max_heatmap_dim,
         annotate_every=args.annotate_every,
     )
+    if code_counts:
+        _plot_codebook_usage(
+            code_counts,
+            args.codebook_size,
+            outdir / "codebook_usage.png",
+        )
     _save_summary(meta, timestamps, factors, outdir / "summary.txt")
 
     print(f"Saved plots to: {outdir}")
     print(f"factor_matrix_shape: {factors.shape}")
+    if market_stats is None:
+        print("Market return overlay skipped: predictions file not found or incompatible.")
+    if not code_counts:
+        print("Codebook usage skipped: no code counts found in state.joblib or count.json.")
 
 
 if __name__ == "__main__":

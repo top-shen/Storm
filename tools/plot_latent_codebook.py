@@ -16,7 +16,7 @@ from storm.utils import load_joblib
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Plot sampled latent factors and VQ codebook embeddings in one PCA space."
+        description="Plot sampled latent factors and VQ codebook embeddings in one 2D space."
     )
     parser.add_argument(
         "--state",
@@ -65,6 +65,42 @@ def _parse_args():
         type=int,
         default=None,
         help="Expected codebook size. Defaults to the size loaded from checkpoint.",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["tsne", "umap", "pca"],
+        default="tsne",
+        help="2D projection method. t-SNE gives a clustered map similar to many paper figures.",
+    )
+    parser.add_argument(
+        "--perplexity",
+        type=float,
+        default=50.0,
+        help="t-SNE perplexity. Larger values make the map smoother.",
+    )
+    parser.add_argument(
+        "--tsne-iters",
+        type=int,
+        default=1200,
+        help="Number of t-SNE optimization iterations.",
+    )
+    parser.add_argument(
+        "--pre-pca-dim",
+        type=int,
+        default=50,
+        help="Pre-reduce high-dimensional vectors before t-SNE/UMAP. Set <=0 to disable.",
+    )
+    parser.add_argument(
+        "--umap-neighbors",
+        type=int,
+        default=30,
+        help="UMAP n_neighbors value.",
+    )
+    parser.add_argument(
+        "--umap-min-dist",
+        type=float,
+        default=0.15,
+        help="UMAP min_dist value.",
     )
     return parser.parse_args()
 
@@ -222,20 +258,108 @@ def _sample_rows(x: np.ndarray, num_samples: int, seed: int):
     return x[indices]
 
 
-def _fit_pca_transform(x: np.ndarray):
+def _standardize(x: np.ndarray):
     mean = x.mean(axis=0, keepdims=True)
     std = x.std(axis=0, keepdims=True)
     std[std < 1e-8] = 1.0
-    normalized = (x - mean) / std
+    return (x - mean) / std
+
+
+def _fit_pca_transform(x: np.ndarray):
+    normalized = _standardize(x)
 
     _u, s, vt = np.linalg.svd(normalized, full_matrices=False)
     total_var = float(np.sum(s ** 2))
     explained = (s[:2] ** 2) / total_var if total_var > 0 else np.zeros(2, dtype=np.float64)
 
     def transform(values: np.ndarray):
-        return ((values - mean) / std) @ vt[:2].T
+        normalized_values = (values - x.mean(axis=0, keepdims=True)) / np.maximum(
+            x.std(axis=0, keepdims=True),
+            1e-8,
+        )
+        return normalized_values @ vt[:2].T
 
     return transform, explained
+
+
+def _pre_pca(x: np.ndarray, n_dims: int):
+    if n_dims <= 0 or n_dims >= x.shape[1]:
+        return x
+    _u, _s, vt = np.linalg.svd(x, full_matrices=False)
+    return x @ vt[:n_dims].T
+
+
+def _project_2d(
+    x: np.ndarray,
+    method: str,
+    seed: int,
+    perplexity: float,
+    tsne_iters: int,
+    pre_pca_dim: int,
+    umap_neighbors: int,
+    umap_min_dist: float,
+):
+    x = _standardize(x).astype(np.float32, copy=False)
+
+    if method == "pca":
+        _u, s, vt = np.linalg.svd(x, full_matrices=False)
+        total_var = float(np.sum(s ** 2))
+        explained = (s[:2] ** 2) / total_var if total_var > 0 else np.zeros(2, dtype=np.float64)
+        return x @ vt[:2].T, {"pc1_var": float(explained[0]), "pc2_var": float(explained[1])}
+
+    x = _pre_pca(x, pre_pca_dim).astype(np.float32, copy=False)
+
+    if method == "tsne":
+        try:
+            from sklearn.manifold import TSNE
+        except ImportError as exc:
+            raise ImportError(
+                "t-SNE requires scikit-learn. Install scikit-learn or run with --method pca."
+            ) from exc
+
+        max_perplexity = max(5.0, (x.shape[0] - 1) / 3.0)
+        perplexity = min(float(perplexity), max_perplexity)
+        kwargs = dict(
+            n_components=2,
+            perplexity=perplexity,
+            init="pca",
+            learning_rate="auto",
+            random_state=seed,
+        )
+        try:
+            reducer = TSNE(max_iter=tsne_iters, **kwargs)
+        except TypeError:
+            reducer = TSNE(n_iter=tsne_iters, **kwargs)
+        coords = reducer.fit_transform(x)
+        return coords, {
+            "perplexity": float(perplexity),
+            "tsne_iters": int(tsne_iters),
+            "pre_pca_dim": int(pre_pca_dim),
+        }
+
+    if method == "umap":
+        try:
+            import umap
+        except ImportError as exc:
+            raise ImportError(
+                "UMAP requires umap-learn. Install umap-learn or run with --method tsne/pca."
+            ) from exc
+
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=umap_neighbors,
+            min_dist=umap_min_dist,
+            metric="euclidean",
+            random_state=seed,
+        )
+        coords = reducer.fit_transform(x)
+        return coords, {
+            "umap_neighbors": int(umap_neighbors),
+            "umap_min_dist": float(umap_min_dist),
+            "pre_pca_dim": int(pre_pca_dim),
+        }
+
+    raise ValueError(f"Unsupported projection method: {method}")
 
 
 def _plot_latent_codebook(
@@ -245,11 +369,27 @@ def _plot_latent_codebook(
     out_path: Path,
     factor_part: str,
     annotate_top_k: int,
+    method: str,
+    seed: int,
+    perplexity: float,
+    tsne_iters: int,
+    pre_pca_dim: int,
+    umap_neighbors: int,
+    umap_min_dist: float,
 ):
     combined = np.concatenate([factor_points, codebook], axis=0)
-    transform, explained = _fit_pca_transform(combined)
-    factor_xy = transform(factor_points)
-    codebook_xy = transform(codebook)
+    combined_xy, projection_stats = _project_2d(
+        combined,
+        method=method,
+        seed=seed,
+        perplexity=perplexity,
+        tsne_iters=tsne_iters,
+        pre_pca_dim=pre_pca_dim,
+        umap_neighbors=umap_neighbors,
+        umap_min_dist=umap_min_dist,
+    )
+    factor_xy = combined_xy[: factor_points.shape[0]]
+    codebook_xy = combined_xy[factor_points.shape[0] :]
 
     total_usage = usage.sum()
     usage_pct = usage / total_usage * 100.0 if total_usage > 0 else usage
@@ -261,9 +401,9 @@ def _plot_latent_codebook(
     ax.scatter(
         factor_xy[:, 0],
         factor_xy[:, 1],
-        s=8,
-        color="#86b6e8",
-        alpha=0.16,
+        s=9,
+        color="#97d37e",
+        alpha=0.32,
         linewidths=0,
         label=f"Latent factors ({factor_part}, sampled)",
     )
@@ -273,10 +413,10 @@ def _plot_latent_codebook(
         codebook_xy[:, 1],
         c=usage_pct,
         s=marker_sizes,
-        cmap="Reds",
-        marker="D",
+        cmap="cool",
+        marker="^",
         edgecolors="#111827",
-        linewidths=0.45,
+        linewidths=0.5,
         alpha=0.92,
         label="Codebook embeddings",
         zorder=3,
@@ -291,13 +431,18 @@ def _plot_latent_codebook(
                 xytext=(5, 5),
                 textcoords="offset points",
                 fontsize=8,
-                color="#991b1b",
+                color="#b91c1c",
                 weight="bold",
             )
 
-    ax.set_title("Latent Factors and Codebook Embeddings (PCA)")
-    ax.set_xlabel(f"PC1 ({explained[0] * 100:.2f}% var)")
-    ax.set_ylabel(f"PC2 ({explained[1] * 100:.2f}% var)")
+    title_method = {"tsne": "t-SNE", "umap": "UMAP", "pca": "PCA"}[method]
+    ax.set_title(f"Latent Factors and Codebook Embeddings ({title_method})")
+    if method == "pca":
+        ax.set_xlabel(f"PC1 ({projection_stats['pc1_var'] * 100:.2f}% var)")
+        ax.set_ylabel(f"PC2 ({projection_stats['pc2_var'] * 100:.2f}% var)")
+    else:
+        ax.set_xlabel(f"{title_method} 1")
+        ax.set_ylabel(f"{title_method} 2")
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.22)
     ax.legend(loc="best", frameon=True)
 
@@ -309,8 +454,8 @@ def _plot_latent_codebook(
     plt.close(fig)
 
     return {
-        "pc1_var": float(explained[0]),
-        "pc2_var": float(explained[1]),
+        "projection_method": method,
+        **projection_stats,
         "max_usage_pct": max_pct,
         "top_code_indices": np.argsort(usage_pct)[::-1][: max(annotate_top_k, 1)].tolist(),
     }
@@ -347,10 +492,12 @@ def _save_summary(
         f"dead_codes: {dead}",
         f"total_code_tokens: {total}",
         f"max_usage_pct: {float(np.max(usage_pct)) if usage_pct.size else 0.0:.6f}",
-        f"pc1_var: {plot_stats['pc1_var']:.6f}",
-        f"pc2_var: {plot_stats['pc2_var']:.6f}",
+        f"projection_method: {plot_stats['projection_method']}",
         f"top_code_indices: {plot_stats['top_code_indices']}",
     ]
+    for key, value in plot_stats.items():
+        if key not in {"projection_method", "top_code_indices"}:
+            lines.append(f"{key}: {value}")
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -385,9 +532,16 @@ def main():
         sampled_tokens,
         codebook,
         usage,
-        outdir / "latent_factors_codebook_pca.png",
+        outdir / f"latent_factors_codebook_{args.method}.png",
         factor_part=factor_part,
         annotate_top_k=args.annotate_top_k,
+        method=args.method,
+        seed=args.seed,
+        perplexity=args.perplexity,
+        tsne_iters=args.tsne_iters,
+        pre_pca_dim=args.pre_pca_dim,
+        umap_neighbors=args.umap_neighbors,
+        umap_min_dist=args.umap_min_dist,
     )
     _save_summary(
         outdir / "latent_factors_codebook_summary.txt",
@@ -403,8 +557,9 @@ def main():
         plot_stats=plot_stats,
     )
 
-    print(f"Saved plot to: {outdir / 'latent_factors_codebook_pca.png'}")
+    print(f"Saved plot to: {outdir / f'latent_factors_codebook_{args.method}.png'}")
     print(f"Saved summary to: {outdir / 'latent_factors_codebook_summary.txt'}")
+    print(f"projection_method: {args.method}")
     print(f"factor_part: {factor_part}")
     print(f"raw_factor_tokens_shape: {raw_tokens.shape}")
     print(f"selected_factor_tokens_shape: {selected_tokens.shape}")

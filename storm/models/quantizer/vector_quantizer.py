@@ -1040,7 +1040,10 @@ class VectorQuantizer(Module):
             # calculate codebook diversity loss (negative of entropy) if needed
 
             if self.has_codebook_diversity_loss:
-                prob = (-distances * self.codebook_diversity_temperature).softmax(dim = -1)
+                # `distances` are assignment logits: higher means closer to the
+                # code, e.g. Euclidean codebook uses -cdist. Diversity should
+                # regularize the same nearest-code distribution used by argmax.
+                prob = (distances * self.codebook_diversity_temperature).softmax(dim = -1)
                 avg_prob = reduce(prob, '... n l -> n l', 'mean')
                 codebook_size = avg_prob.shape[-1]
                 codebook_diversity_loss = -entropy(avg_prob).mean() / codebook_size

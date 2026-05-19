@@ -174,6 +174,7 @@ class DynamicSingleVQVAE(nn.Module):
         weighted_quantized_loss = quantized_loss[0]
         weighted_commit_loss = quantized_loss_breakdown.weighted_commit_loss
         weighted_codebook_diversity_loss = quantized_loss_breakdown.weighted_codebook_diversity_loss
+        weighted_codebook_usage_balance_loss = quantized_loss_breakdown.weighted_codebook_usage_balance_loss
         weighted_orthogonal_reg_loss = quantized_loss_breakdown.weighted_orthogonal_reg_loss
 
         return_info = dict(
@@ -185,6 +186,7 @@ class DynamicSingleVQVAE(nn.Module):
             weighted_quantized_loss=weighted_quantized_loss,
             weighted_commit_loss=weighted_commit_loss,
             weighted_codebook_diversity_loss=weighted_codebook_diversity_loss,
+            weighted_codebook_usage_balance_loss=weighted_codebook_usage_balance_loss,
             weighted_orthogonal_reg_loss=weighted_orthogonal_reg_loss
         )
 
@@ -297,6 +299,7 @@ class DynamicSingleVQVAE(nn.Module):
         weighted_quantized_loss = encoder_output["weighted_quantized_loss"]
         weighted_commit_loss = encoder_output["weighted_commit_loss"]
         weighted_codebook_diversity_loss = encoder_output["weighted_codebook_diversity_loss"]
+        weighted_codebook_usage_balance_loss = encoder_output["weighted_codebook_usage_balance_loss"]
         weighted_orthogonal_reg_loss = encoder_output["weighted_orthogonal_reg_loss"]
 
         factors = None
@@ -354,6 +357,7 @@ class DynamicSingleVQVAE(nn.Module):
             weighted_quantized_loss=weighted_quantized_loss,
             weighted_commit_loss=weighted_commit_loss,
             weighted_codebook_diversity_loss=weighted_codebook_diversity_loss,
+            weighted_codebook_usage_balance_loss=weighted_codebook_usage_balance_loss,
             weighted_orthogonal_reg_loss=weighted_orthogonal_reg_loss
         )
 

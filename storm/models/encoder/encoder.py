@@ -23,7 +23,6 @@ class VAETransformerEncoder(BaseEncoder):
                  norm_layer = nn.LayerNorm,
                  cls_embed: bool = True,
                  sep_pos_embed: bool = True,
-                 sep_pos_embed_mode: str = "temporal_spatial",
                  trunc_init: bool = False,
                  no_qkv_bias: bool = False,
                  if_mask: bool = False,
@@ -48,7 +47,6 @@ class VAETransformerEncoder(BaseEncoder):
 
         self.trunc_init = trunc_init
         self.sep_pos_embed = sep_pos_embed
-        self.sep_pos_embed_mode = sep_pos_embed_mode
         self.cls_embed = cls_embed
 
         self.input_dim = input_dim
@@ -76,24 +74,12 @@ class VAETransformerEncoder(BaseEncoder):
             self.cls_token = nn.Parameter(torch.zeros(1, 1, latent_dim))
 
         if sep_pos_embed:
-            supported_pos_modes = {"temporal_spatial", "temporal_only", "spatial_only"}
-            if sep_pos_embed_mode not in supported_pos_modes:
-                raise ValueError(
-                    f"Unsupported sep_pos_embed_mode={sep_pos_embed_mode}. "
-                    f"Expected one of {sorted(supported_pos_modes)}."
-                )
-            if sep_pos_embed_mode in {"temporal_spatial", "spatial_only"}:
-                self.pos_embed_spatial = nn.Parameter(
-                    torch.zeros(1, self.n_size[1] * self.n_size[2], latent_dim)
-                )
-            else:
-                self.pos_embed_spatial = None
-            if sep_pos_embed_mode in {"temporal_spatial", "temporal_only"}:
-                self.pos_embed_temporal = nn.Parameter(
-                    torch.zeros(1, self.n_size[0], latent_dim)
-                )
-            else:
-                self.pos_embed_temporal = None
+            self.pos_embed_spatial = nn.Parameter(
+                torch.zeros(1, self.n_size[1] * self.n_size[2], latent_dim)
+            )
+            self.pos_embed_temporal = nn.Parameter(
+                torch.zeros(1, self.n_size[0], latent_dim)
+            )
             if self.cls_embed:
                 self.pos_embed_class = nn.Parameter(torch.zeros(1, 1, latent_dim))
         else:
@@ -127,10 +113,8 @@ class VAETransformerEncoder(BaseEncoder):
         if self.cls_embed:
             torch.nn.init.trunc_normal_(self.cls_token, std=0.02)
         if self.sep_pos_embed:
-            if self.pos_embed_spatial is not None:
-                torch.nn.init.trunc_normal_(self.pos_embed_spatial, std=0.02)
-            if self.pos_embed_temporal is not None:
-                torch.nn.init.trunc_normal_(self.pos_embed_temporal, std=0.02)
+            torch.nn.init.trunc_normal_(self.pos_embed_spatial, std=0.02)
+            torch.nn.init.trunc_normal_(self.pos_embed_temporal, std=0.02)
 
             if self.cls_embed:
                 torch.nn.init.trunc_normal_(self.pos_embed_class, std=0.02)
@@ -214,17 +198,13 @@ class VAETransformerEncoder(BaseEncoder):
 
         # add pos embed w/o cls token
         if self.sep_pos_embed:
-            pos_embed = 0.0
-            if self.pos_embed_spatial is not None:
-                pos_embed = pos_embed + self.pos_embed_spatial.repeat(
-                    1, self.n_size[0], 1
-                )
-            if self.pos_embed_temporal is not None:
-                pos_embed = pos_embed + torch.repeat_interleave(
-                    self.pos_embed_temporal,
-                    self.n_size[1] * self.n_size[2],
-                    dim=1,
-                )
+            pos_embed = self.pos_embed_spatial.repeat(
+                1, self.n_size[0], 1
+            ) + torch.repeat_interleave(
+                self.pos_embed_temporal,
+                self.n_size[1] * self.n_size[2],
+                dim=1,
+            )
             pos_embed = pos_embed.expand(sample.shape[0], -1, -1)
             pos_embed = torch.gather(
                 pos_embed,

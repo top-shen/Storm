@@ -40,6 +40,7 @@ class VQVAE(nn.Module):
         weighted_quantized_loss = quantized_loss[0]
         weighted_commit_loss = quantized_loss_breakdown.weighted_commit_loss
         weighted_codebook_diversity_loss = quantized_loss_breakdown.weighted_codebook_diversity_loss
+        weighted_codebook_usage_balance_loss = quantized_loss_breakdown.weighted_codebook_usage_balance_loss
         weighted_orthogonal_reg_loss = quantized_loss_breakdown.weighted_orthogonal_reg_loss
 
         return_info = dict(
@@ -50,6 +51,7 @@ class VQVAE(nn.Module):
             weighted_quantized_loss=weighted_quantized_loss,
             weighted_commit_loss=weighted_commit_loss,
             weighted_codebook_diversity_loss=weighted_codebook_diversity_loss,
+            weighted_codebook_usage_balance_loss=weighted_codebook_usage_balance_loss,
             weighted_orthogonal_reg_loss=weighted_orthogonal_reg_loss
         )
 

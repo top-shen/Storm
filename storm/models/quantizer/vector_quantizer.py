@@ -713,6 +713,7 @@ class CosineSimCodebook(Module):
 LossBreakdown = namedtuple('LossBreakdown', [
     'weighted_commit_loss',
     'weighted_codebook_diversity_loss',
+    'weighted_codebook_usage_balance_loss',
     'weighted_orthogonal_reg_loss'
 ])
 
@@ -743,6 +744,8 @@ class VectorQuantizer(Module):
         orthogonal_reg_max_codes = None,
         codebook_diversity_loss_weight = 0.,
         codebook_diversity_temperature = 100.,
+        codebook_usage_balance_loss_weight = 0.,
+        codebook_usage_balance_temperature = None,
         stochastic_sample_codes = False,
         sample_codebook_temp = 1.,
         straight_through = False,
@@ -794,6 +797,14 @@ class VectorQuantizer(Module):
         self.has_codebook_diversity_loss = has_codebook_diversity_loss
         self.codebook_diversity_temperature = codebook_diversity_temperature
         self.codebook_diversity_loss_weight = codebook_diversity_loss_weight
+
+        has_codebook_usage_balance_loss = codebook_usage_balance_loss_weight > 0.
+        self.has_codebook_usage_balance_loss = has_codebook_usage_balance_loss
+        self.codebook_usage_balance_temperature = default(
+            codebook_usage_balance_temperature,
+            codebook_diversity_temperature,
+        )
+        self.codebook_usage_balance_loss_weight = codebook_usage_balance_loss_weight
 
         assert not (ema_update and learnable_codebook), 'learnable codebook not compatible with EMA update'
 
@@ -952,7 +963,7 @@ class VectorQuantizer(Module):
         quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
 
         # losses for loss breakdown
-        weighted_commit_loss = weighted_orthogonal_reg_loss = inplace_optimize_loss = weighted_codebook_diversity_loss = self.zero
+        weighted_commit_loss = weighted_orthogonal_reg_loss = inplace_optimize_loss = weighted_codebook_diversity_loss = weighted_codebook_usage_balance_loss = self.zero
 
         # one step in-place update
 
@@ -1052,6 +1063,21 @@ class VectorQuantizer(Module):
 
                 loss = loss + weighted_codebook_diversity_loss
 
+            if self.has_codebook_usage_balance_loss:
+                usage_prob = (distances * self.codebook_usage_balance_temperature).softmax(dim = -1)
+                avg_usage = reduce(usage_prob, '... l -> l', 'mean')
+                codebook_size = avg_usage.shape[-1]
+                uniform_usage = torch.full_like(avg_usage, 1. / codebook_size)
+                codebook_usage_balance_loss = (
+                    avg_usage * ((avg_usage + self.eps).log() - uniform_usage.log())
+                ).sum()
+
+                weighted_codebook_usage_balance_loss = (
+                    codebook_usage_balance_loss * self.codebook_usage_balance_loss_weight
+                )
+
+                loss = loss + weighted_codebook_usage_balance_loss
+
             # commitment loss
 
             if self.has_commitment_loss:
@@ -1140,6 +1166,7 @@ class VectorQuantizer(Module):
 
         loss_breakdown = LossBreakdown(weighted_commit_loss,
                                        weighted_codebook_diversity_loss,
+                                       weighted_codebook_usage_balance_loss,
                                        weighted_orthogonal_reg_loss)
 
         return quantize, embed_ind, loss, loss_breakdown

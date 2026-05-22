@@ -404,14 +404,44 @@ def _load_checkpoint_state_dict(checkpoint_path: Path):
     if checkpoint_path is None or not checkpoint_path.exists():
         return None
 
-    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+    try:
+        checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=True)
+    except TypeError:
+        checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
     if isinstance(checkpoint, dict):
-        for key in ("state_dict", "model_state_dict", "model"):
+        for key in ("model_state", "model_ema_state", "state_dict", "model_state_dict", "model"):
             value = checkpoint.get(key)
             if isinstance(value, dict):
                 return value
     if isinstance(checkpoint, dict):
         return checkpoint
+    return None
+
+
+def _resolve_checkpoint_path(args, state_path: Path):
+    if args.checkpoint:
+        path = Path(args.checkpoint).resolve()
+        return path if path.exists() and path.is_file() else None
+
+    checkpoint_dir = state_path.parent / "checkpoint"
+    candidates = [
+        checkpoint_dir / "best.pth",
+        checkpoint_dir / "latest.pth",
+        checkpoint_dir / "last.pth",
+    ]
+    if checkpoint_dir.exists():
+        for pattern in ("*.pth", "*.pt", "*.ckpt"):
+            candidates.extend(sorted(checkpoint_dir.glob(pattern)))
+    candidates.extend(sorted(state_path.parent.glob("*.pth")))
+
+    seen = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists() and candidate.is_file():
+            return candidate
     return None
 
 
@@ -425,7 +455,11 @@ def _load_codebook_embedding(checkpoint_path: Path):
         if not torch.is_tensor(value):
             continue
         clean_key = key.replace("module.", "")
-        if clean_key.endswith("quantizer._codebook.embed") or clean_key.endswith("_codebook.embed"):
+        if (
+            clean_key.endswith("quantizer._codebook.embed")
+            or clean_key.endswith("_codebook.embed")
+            or clean_key.endswith("codebook.embed")
+        ):
             candidates.append((clean_key, value.detach().cpu()))
 
     if not candidates:
@@ -560,7 +594,7 @@ def _plot_latent_codebook_tsne(
     plt.close(fig)
 
     return {
-        "checkpoint": str(args.checkpoint) if args.checkpoint else None,
+        "checkpoint": str(args.resolved_checkpoint) if getattr(args, "resolved_checkpoint", None) else None,
         "codebook_key": codebook_key,
         "factor_part": args.factor_part,
         "raw_factor_tokens_shape": list(factor_tokens.shape),
@@ -607,7 +641,8 @@ def main():
     meta = state_obj.get("meta", {})
     timestamps, factors = _extract_factors(state_obj)
     predictions_path = Path(args.predictions).resolve() if args.predictions else state_path.parent / "test_predictions.joblib"
-    checkpoint_path = Path(args.checkpoint).resolve() if args.checkpoint else state_path.parent / "checkpoint" / "best.pth"
+    checkpoint_path = _resolve_checkpoint_path(args, state_path)
+    args.resolved_checkpoint = checkpoint_path
     market_stats = _load_market_stats(predictions_path, timestamps)
     code_counts = _load_code_counts(state_obj, state_path)
 
@@ -656,7 +691,8 @@ def main():
     if not code_counts:
         print("Codebook usage skipped: no code counts found in state.joblib or count.json.")
     if codebook is None:
-        print(f"Latent-codebook t-SNE skipped: checkpoint/codebook not found at {checkpoint_path}.")
+        searched_dir = state_path.parent / "checkpoint"
+        print(f"Latent-codebook t-SNE skipped: checkpoint/codebook not found. searched: {searched_dir}")
 
 
 if __name__ == "__main__":

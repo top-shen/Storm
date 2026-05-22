@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 
 from storm.utils import load_joblib
 
@@ -46,6 +47,41 @@ def _parse_args():
         default=256,
         help="Codebook size used for the usage distribution plot.",
     )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Optional checkpoint path. Defaults to <state_dir>/checkpoint/best.pth.",
+    )
+    parser.add_argument(
+        "--factor-part",
+        choices=("quantized", "encoder", "full"),
+        default="quantized",
+        help="Which part of the saved factor to compare with the codebook embedding.",
+    )
+    parser.add_argument(
+        "--max-tsne-samples",
+        type=int,
+        default=8000,
+        help="Maximum latent tokens sampled for the latent-codebook t-SNE plot.",
+    )
+    parser.add_argument(
+        "--tsne-perplexity",
+        type=float,
+        default=50.0,
+        help="Perplexity used for the latent-codebook t-SNE plot.",
+    )
+    parser.add_argument(
+        "--tsne-iters",
+        type=int,
+        default=1200,
+        help="Number of t-SNE iterations for the latent-codebook plot.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed used when sampling latent tokens.",
+    )
     return parser.parse_args()
 
 
@@ -64,6 +100,33 @@ def _extract_factors(state_obj):
     return timestamps, factor_matrix
 
 
+def _extract_factor_tokens(state_obj, factor_part: str):
+    items = state_obj.get("items", {})
+    if not items:
+        raise ValueError("No factor items found in state.joblib.")
+
+    token_chunks = []
+    for timestamp in items:
+        factor = np.asarray(items[timestamp]["factor"], dtype=np.float32)
+        if factor.ndim == 1:
+            factor = factor.reshape(1, -1)
+        elif factor.ndim > 2:
+            factor = factor.reshape(-1, factor.shape[-1])
+        token_chunks.append(factor)
+
+    tokens = np.concatenate(token_chunks, axis=0)
+    if factor_part == "full":
+        return tokens
+
+    if tokens.shape[-1] % 2 != 0:
+        return tokens
+
+    mid = tokens.shape[-1] // 2
+    if factor_part == "encoder":
+        return tokens[:, :mid]
+    return tokens[:, mid:]
+
+
 def _pca_2d(x: np.ndarray):
     centered = x - x.mean(axis=0, keepdims=True)
     _u, s, vt = np.linalg.svd(centered, full_matrices=False)
@@ -75,6 +138,16 @@ def _pca_2d(x: np.ndarray):
     else:
         explained = (s[:2] ** 2) / total_var
     return coords, explained
+
+
+def _pca_project(x: np.ndarray, n_components: int):
+    x = np.asarray(x, dtype=np.float64)
+    n_components = min(n_components, x.shape[0], x.shape[1])
+    if n_components <= 0:
+        return x
+    centered = x - x.mean(axis=0, keepdims=True)
+    _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
+    return centered @ vt[:n_components].T
 
 
 def _zscore(values: np.ndarray):
@@ -327,6 +400,178 @@ def _plot_codebook_usage(counts, codebook_size: int, out_path: Path):
     plt.close(fig)
 
 
+def _load_checkpoint_state_dict(checkpoint_path: Path):
+    if checkpoint_path is None or not checkpoint_path.exists():
+        return None
+
+    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+    if isinstance(checkpoint, dict):
+        for key in ("state_dict", "model_state_dict", "model"):
+            value = checkpoint.get(key)
+            if isinstance(value, dict):
+                return value
+    if isinstance(checkpoint, dict):
+        return checkpoint
+    return None
+
+
+def _load_codebook_embedding(checkpoint_path: Path):
+    state_dict = _load_checkpoint_state_dict(checkpoint_path)
+    if not state_dict:
+        return None, None
+
+    candidates = []
+    for key, value in state_dict.items():
+        if not torch.is_tensor(value):
+            continue
+        clean_key = key.replace("module.", "")
+        if clean_key.endswith("quantizer._codebook.embed") or clean_key.endswith("_codebook.embed"):
+            candidates.append((clean_key, value.detach().cpu()))
+
+    if not candidates:
+        return None, None
+
+    key, tensor = candidates[0]
+    array = tensor.float().numpy()
+    array = np.squeeze(array)
+    if array.ndim != 2:
+        return None, None
+    return key, array
+
+
+def _plot_latent_codebook_tsne(
+    factor_tokens: np.ndarray,
+    codebook: np.ndarray,
+    counts,
+    codebook_key: str,
+    args,
+    out_path: Path,
+):
+    if factor_tokens.size == 0 or codebook.size == 0:
+        return None
+
+    if factor_tokens.shape[-1] != codebook.shape[-1]:
+        min_dim = min(factor_tokens.shape[-1], codebook.shape[-1])
+        factor_tokens = factor_tokens[:, -min_dim:]
+        codebook = codebook[:, -min_dim:]
+
+    rng = np.random.default_rng(args.seed)
+    total_tokens = factor_tokens.shape[0]
+    if total_tokens > args.max_tsne_samples:
+        sample_idx = rng.choice(total_tokens, size=args.max_tsne_samples, replace=False)
+        sampled_tokens = factor_tokens[sample_idx]
+    else:
+        sampled_tokens = factor_tokens
+
+    combined = np.concatenate([sampled_tokens, codebook], axis=0)
+    if combined.shape[1] > 50:
+        combined_for_tsne = _pca_project(combined, 50)
+    else:
+        combined_for_tsne = combined
+
+    try:
+        from sklearn.manifold import TSNE
+
+        perplexity = min(args.tsne_perplexity, max(5.0, (combined_for_tsne.shape[0] - 1) / 3.0))
+        try:
+            coords = TSNE(
+                n_components=2,
+                perplexity=perplexity,
+                max_iter=args.tsne_iters,
+                init="pca",
+                learning_rate="auto",
+                random_state=args.seed,
+            ).fit_transform(combined_for_tsne)
+        except TypeError:
+            coords = TSNE(
+                n_components=2,
+                perplexity=perplexity,
+                n_iter=args.tsne_iters,
+                init="pca",
+                learning_rate="auto",
+                random_state=args.seed,
+            ).fit_transform(combined_for_tsne)
+        title = "Latent Factors and Codebook Embeddings (t-SNE)"
+        x_label = "t-SNE 1"
+        y_label = "t-SNE 2"
+        method = "tsne"
+    except Exception as exc:
+        coords = _pca_project(combined, 2)
+        title = "Latent Factors and Codebook Embeddings (PCA fallback)"
+        x_label = "PC1"
+        y_label = "PC2"
+        method = f"pca_fallback: {exc}"
+
+    latent_coords = coords[: sampled_tokens.shape[0]]
+    codebook_coords = coords[sampled_tokens.shape[0] :]
+
+    usage = np.zeros(codebook.shape[0], dtype=np.float64)
+    for idx, value in counts.items():
+        if 0 <= int(idx) < usage.shape[0]:
+            usage[int(idx)] = float(value)
+    usage_pct = usage / usage.sum() * 100.0 if usage.sum() > 0 else usage
+    top_idx = np.argsort(usage_pct)[::-1][:8]
+
+    fig, ax = plt.subplots(figsize=(11, 9))
+    ax.scatter(
+        latent_coords[:, 0],
+        latent_coords[:, 1],
+        s=9,
+        color="#8bd17c",
+        alpha=0.42,
+        linewidths=0,
+        label=f"Latent factors ({args.factor_part}, sampled)",
+    )
+    scatter = ax.scatter(
+        codebook_coords[:, 0],
+        codebook_coords[:, 1],
+        c=usage_pct,
+        cmap="cool",
+        s=140,
+        marker="^",
+        edgecolors="#111827",
+        linewidths=0.6,
+        alpha=0.95,
+        label="Codebook embeddings",
+    )
+
+    for idx in top_idx:
+        if usage_pct[idx] <= 0:
+            continue
+        ax.annotate(
+            str(idx),
+            (codebook_coords[idx, 0], codebook_coords[idx, 1]),
+            xytext=(4, 4),
+            textcoords="offset points",
+            color="#b91c1c",
+            fontsize=9,
+            fontweight="bold",
+        )
+
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.25)
+    ax.legend(loc="upper right", frameon=True)
+    cbar = fig.colorbar(scatter, ax=ax)
+    cbar.set_label("Code usage (%)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=220)
+    plt.close(fig)
+
+    return {
+        "checkpoint": str(args.checkpoint) if args.checkpoint else None,
+        "codebook_key": codebook_key,
+        "factor_part": args.factor_part,
+        "raw_factor_tokens_shape": list(factor_tokens.shape),
+        "sampled_factor_tokens_shape": list(sampled_tokens.shape),
+        "codebook_shape": list(codebook.shape),
+        "projection_method": method,
+        "max_usage_pct": float(np.max(usage_pct)) if usage_pct.size else 0.0,
+        "top_code_indices": [int(idx) for idx in top_idx.tolist()],
+    }
+
+
 def _save_summary(meta, timestamps, factors, out_path: Path):
     summary_lines = [
         f"num_timestamps: {len(timestamps)}",
@@ -362,6 +607,7 @@ def main():
     meta = state_obj.get("meta", {})
     timestamps, factors = _extract_factors(state_obj)
     predictions_path = Path(args.predictions).resolve() if args.predictions else state_path.parent / "test_predictions.joblib"
+    checkpoint_path = Path(args.checkpoint).resolve() if args.checkpoint else state_path.parent / "checkpoint" / "best.pth"
     market_stats = _load_market_stats(predictions_path, timestamps)
     code_counts = _load_code_counts(state_obj, state_path)
 
@@ -385,6 +631,22 @@ def main():
             args.codebook_size,
             outdir / "codebook_usage.png",
         )
+    codebook_key, codebook = _load_codebook_embedding(checkpoint_path)
+    if codebook is not None:
+        factor_tokens = _extract_factor_tokens(state_obj, args.factor_part)
+        tsne_summary = _plot_latent_codebook_tsne(
+            factor_tokens,
+            codebook,
+            code_counts,
+            codebook_key,
+            args,
+            outdir / "latent_codebook_tsne.png",
+        )
+        if tsne_summary is not None:
+            (outdir / "latent_codebook_tsne_summary.json").write_text(
+                json.dumps(tsne_summary, indent=2),
+                encoding="utf-8",
+            )
     _save_summary(meta, timestamps, factors, outdir / "summary.txt")
 
     print(f"Saved plots to: {outdir}")
@@ -393,6 +655,8 @@ def main():
         print("Market return overlay skipped: predictions file not found or incompatible.")
     if not code_counts:
         print("Codebook usage skipped: no code counts found in state.joblib or count.json.")
+    if codebook is None:
+        print(f"Latent-codebook t-SNE skipped: checkpoint/codebook not found at {checkpoint_path}.")
 
 
 if __name__ == "__main__":

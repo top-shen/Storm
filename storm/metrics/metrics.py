@@ -25,9 +25,17 @@ def MDD(ret):
             mdd =dd
     return mdd
 
-def SR(ret):
-    res = 1.0 * np.mean(ret) * np.sqrt(ret.shape[0]) / np.std(ret)
-    return res
+def SR(ret, annualization=252, eps=1e-12):
+    ret = np.asarray(ret, dtype=np.float64)
+    if ret.size <= 1:
+        return 0.0
+
+    volatility = np.std(ret, ddof=1)
+    if volatility <= eps or not np.isfinite(volatility):
+        return 0.0
+
+    res = np.sqrt(annualization) * np.mean(ret) / volatility
+    return float(res) if np.isfinite(res) else 0.0
 
 def CR(ret, mdd):
     res = np.mean(ret) * 252 / mdd

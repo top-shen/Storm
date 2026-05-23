@@ -32,50 +32,53 @@ class TopkDropoutStrategy():
 
         N, S = pred_labels.shape
         assert N == true_labels.shape[0] and S == true_labels.shape[1], "Prediction and true labels shape mismatch."
+        k = min(int(self.topk), S)
+        dropout = min(int(self.dropout), k)
+        min_hold = max(k - dropout, 0)
 
         value = self.init_cash
         rets = []
         culmulative_rets = []
 
         # Initialize the top-k list with the first day's predictions
-        topk_list = np.argsort(pred_labels[0])[-self.topk:]
-        transaction_cost_ratio = self.transaction_cost_ratio
+        topk_list = np.argsort(pred_labels[0])[-k:]
 
         for i in range(N):
             pred_label = pred_labels[i].flatten()
             true_label = true_labels[i].flatten()
+            turnover = 0.0
 
             if i > 0:
-                pre_topk_list = topk_list
+                pre_topk_list = topk_list.copy()
 
                 # Find intersection of previous and current top-k
-                same_assets_set = set(pre_topk_list) & set(np.argsort(pred_label)[-self.topk:])
+                same_assets_set = set(pre_topk_list) & set(np.argsort(pred_label)[-k:])
 
                 # Determine hold assets
                 hold_assets = list(same_assets_set)
 
                 # Ensure at least topk - dropout assets are retained
-                if len(hold_assets) < (self.topk - self.dropout):
+                if len(hold_assets) < min_hold:
                     # Sort remaining assets by predicted score
                     remaining_assets = list(set(pre_topk_list) - same_assets_set)
                     sorted_remaining = sorted(remaining_assets, key=lambda x: pred_label[x])
 
                     # Retain additional assets to meet topk - dropout requirement
-                    hold_assets.extend(sorted_remaining[-(self.topk - self.dropout - len(hold_assets)):])
+                    hold_assets.extend(sorted_remaining[-(min_hold - len(hold_assets)):])
 
                 # Update the top-k list
                 non_hold_assets = list(set(range(S)) - set(hold_assets))
                 sorted_non_hold = sorted(non_hold_assets, key=lambda x: pred_label[x])
 
                 # Select the top-k performing assets and ensure they are sorted in ascending order
-                topk_candidates = hold_assets + sorted_non_hold[-(self.topk - len(hold_assets)):]
-                topk_list = sorted(topk_candidates, key=lambda x: pred_label[x])[-self.topk:]
+                topk_candidates = hold_assets + sorted_non_hold[-(k - len(hold_assets)):]
+                topk_list = sorted(topk_candidates, key=lambda x: pred_label[x])[-k:]
 
-                # Adjust transaction cost ratio based on the number of changes in the portfolio
-                transaction_cost_ratio = self.transaction_cost_ratio * (2 * (self.topk - len(hold_assets)) / self.topk)
+                turnover = 2.0 * (k - len(set(pre_topk_list) & set(topk_list))) / k
 
             # Calculate returns and update value
-            ret = np.sum(true_label[topk_list] * (1 - transaction_cost_ratio))
+            gross_ret = np.mean(true_label[topk_list])
+            ret = gross_ret - self.transaction_cost_ratio * turnover
             value += value * ret
             rets.append(ret)
 

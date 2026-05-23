@@ -6,7 +6,6 @@ import pandas as pd
 
 from storm.utils import assemble_project_path
 from storm.utils import load_json
-from storm.downstream.portfolio import TopkDropoutStrategy
 
 
 def _load_assets(assets_path: str) -> List[str]:
@@ -290,8 +289,7 @@ def _precision_and_sr_np(
     top_n: int = 10,
 ) -> Dict[str, float]:
     precisions = []
-    pred_rows = []
-    true_rows = []
+    daily_returns = []
 
     for pred_row, futr_row in zip(preds, futrs):
         pred_row = np.asarray(pred_row, dtype=np.float64).reshape(-1)
@@ -306,15 +304,14 @@ def _precision_and_sr_np(
         top_indices = np.argsort(pred_row)[-k:]
         top_returns = futr_row[top_indices]
         precisions.append(float(np.mean(top_returns > 0)))
-        pred_rows.append(pred_row)
-        true_rows.append(futr_row)
+        daily_returns.append(float(np.mean(top_returns)))
 
-    if len(pred_rows) <= 1:
+    if len(daily_returns) <= 1:
         sr = 0.0
     else:
-        pred_labels = np.stack(pred_rows, axis=0)
-        true_labels = np.stack(true_rows, axis=0)
-        sr = float(TopkDropoutStrategy()(pred_labels=pred_labels, true_labels=true_labels)["SR"])
+        returns = np.asarray(daily_returns, dtype=np.float64)
+        std = returns.std(ddof=0)
+        sr = float(returns.mean() / std) if std > 0 else 0.0
 
     precision = float(np.mean(precisions)) if precisions else 0.0
     return {

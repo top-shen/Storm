@@ -280,7 +280,13 @@ class DynamicSingleVQVAETrainer():
                 self.logger.info(f"| Checkpoint deleted: {checkpoint_file}")
         self.logger.info(f"| Checkpoint saved: {checkpoint_file}")
 
-    def load_checkpoint(self, epoch: int = -1, checkpoint_file: str = None, if_best: bool = False):
+    def load_checkpoint(
+        self,
+        epoch: int = -1,
+        checkpoint_file: str = None,
+        if_best: bool = False,
+        load_optimizer: bool = True,
+    ):
 
         if checkpoint_file is None:
             best_checkpoint_file = os.path.join(self.checkpoint_path, "best.pth")
@@ -322,8 +328,9 @@ class DynamicSingleVQVAETrainer():
             unwrapped_model_ema = self.accelerator.unwrap_model(self.model_ema)
             unwrapped_model_ema.load_state_dict(state['model_ema_state'])
 
-            self.optimizer.load_state_dict(state['optimizer_state'])
-            self.scheduler.load_state_dict(state['scheduler_state'])
+            if load_optimizer:
+                self.optimizer.load_state_dict(state['optimizer_state'])
+                self.scheduler.load_state_dict(state['scheduler_state'])
 
             return state['epoch']
         else:
@@ -1136,12 +1143,12 @@ class DynamicSingleVQVAETrainer():
         if checkpoint_path is None:
             best_checkpoint_path = os.path.join(self.checkpoint_path, "best.pth")
             if os.path.exists(best_checkpoint_path):
-                epoch = self.load_checkpoint(if_best=True)
+                epoch = self.load_checkpoint(if_best=True, load_optimizer=False)
             else:
                 self.logger.info("| Best checkpoint not found. Load the last checkpoint.")
-                epoch = self.load_checkpoint()
+                epoch = self.load_checkpoint(load_optimizer=False)
         else:
-            epoch = self.load_checkpoint(checkpoint_file=checkpoint_path)
+            epoch = self.load_checkpoint(checkpoint_file=checkpoint_path, load_optimizer=False)
 
         log_stats = {"epoch": epoch}
         eval_model, eval_model_name = self._get_eval_model()
@@ -1188,12 +1195,12 @@ class DynamicSingleVQVAETrainer():
         if checkpoint_path is None:
             best_checkpoint_path = os.path.join(self.checkpoint_path, "best.pth")
             if os.path.exists(best_checkpoint_path):
-                epoch = self.load_checkpoint(if_best=True)
+                epoch = self.load_checkpoint(if_best=True, load_optimizer=False)
             else:
                 self.logger.info("| Best checkpoint not found. Load the last checkpoint.")
-                epoch = self.load_checkpoint()
+                epoch = self.load_checkpoint(load_optimizer=False)
         else:
-            epoch = self.load_checkpoint(checkpoint_file=checkpoint_path)
+            epoch = self.load_checkpoint(checkpoint_file=checkpoint_path, load_optimizer=False)
 
         log_stats = {"epoch": epoch}
 

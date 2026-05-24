@@ -991,12 +991,15 @@ class VectorQuantizer(Module):
 
             quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
 
-        if self.training:
+        should_compute_loss = self.training or return_loss_breakdown
+
+        if should_compute_loss:
             # determine code to use for commitment loss
             maybe_detach = torch.detach if not self.learnable_codebook or freeze_codebook else identity
 
             commit_quantize = maybe_detach(quantize)
 
+        if self.training:
             # straight through
 
             quantize = x + (quantize - x).detach()
@@ -1047,7 +1050,7 @@ class VectorQuantizer(Module):
 
         loss = torch.tensor([0.], device = device, requires_grad = self.training)
 
-        if self.training:
+        if should_compute_loss:
             # calculate codebook diversity loss (negative of entropy) if needed
 
             if self.has_codebook_diversity_loss:

@@ -496,6 +496,10 @@ class DynamicSingleVQVAETrainer():
             weighted_quantized_loss = output["weighted_quantized_loss"]
             weighted_commit_loss = output["weighted_commit_loss"]
             weighted_codebook_diversity_loss = output["weighted_codebook_diversity_loss"]
+            weighted_codebook_usage_balance_loss = output.get(
+                "weighted_codebook_usage_balance_loss",
+                torch.tensor(0.0, device=self.device, dtype=self.dtype),
+            )
             weighted_orthogonal_reg_loss = output["weighted_orthogonal_reg_loss"]
 
             # `weighted_quantized_loss` already contains the full quantizer
@@ -507,6 +511,7 @@ class DynamicSingleVQVAETrainer():
                 "weighted_quantized_loss": weighted_quantized_loss,
                 "weighted_commit_loss": weighted_commit_loss,
                 "weighted_codebook_diversity_loss": weighted_codebook_diversity_loss,
+                "weighted_codebook_usage_balance_loss": weighted_codebook_usage_balance_loss,
                 "weighted_orthogonal_reg_loss": weighted_orthogonal_reg_loss
             })
 

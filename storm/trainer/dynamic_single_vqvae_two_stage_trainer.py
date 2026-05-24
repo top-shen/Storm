@@ -562,6 +562,7 @@ class DynamicSingleVQVAETwoStageTrainer(DynamicSingleVQVAETrainer):
                     "weighted_prior_ret_loss": weighted_prior_ret_loss,
                     "prior_ranking_loss": prior_ranking_loss,
                     "weighted_prior_ranking_loss": weighted_prior_ranking_loss,
+                    "prior_return_rank_loss": weighted_prior_ret_loss + weighted_prior_ranking_loss,
                     "prior_ic_loss": prior_ic_loss,
                     "weighted_prior_ic_loss": weighted_prior_ic_loss,
                 })

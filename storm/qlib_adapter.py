@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List
 import numpy as np
 import pandas as pd
 
+from storm.downstream.portfolio import TopkDropoutStrategy
 from storm.utils import assemble_project_path
 from storm.utils import load_json
 
@@ -289,13 +290,17 @@ def _precision_and_sr_np(
     top_n: int = 10,
 ) -> Dict[str, float]:
     precisions = []
-    daily_returns = []
+    pred_rows = []
+    true_rows = []
 
     for pred_row, futr_row in zip(preds, futrs):
         pred_row = np.asarray(pred_row, dtype=np.float64).reshape(-1)
         futr_row = np.asarray(futr_row, dtype=np.float64).reshape(-1)
         if pred_row.size == 0 or futr_row.size == 0:
             continue
+
+        pred_rows.append(pred_row)
+        true_rows.append(futr_row)
 
         k = min(int(top_n), pred_row.size)
         if k <= 0:
@@ -304,14 +309,21 @@ def _precision_and_sr_np(
         top_indices = np.argsort(pred_row)[-k:]
         top_returns = futr_row[top_indices]
         precisions.append(float(np.mean(top_returns > 0)))
-        daily_returns.append(float(np.mean(top_returns)))
 
-    if len(daily_returns) <= 1:
+    if len(pred_rows) <= 1:
         sr = 0.0
     else:
-        returns = np.asarray(daily_returns, dtype=np.float64)
-        std = returns.std(ddof=0)
-        sr = float(returns.mean() / std) if std > 0 else 0.0
+        strategy = TopkDropoutStrategy(
+            topk=5,
+            dropout=3,
+            transaction_cost_ratio=1e-4,
+            init_cash=1e6,
+        )
+        downstream_metrics = strategy(
+            pred_labels=np.stack(pred_rows, axis=0),
+            true_labels=np.stack(true_rows, axis=0),
+        )
+        sr = float(downstream_metrics["SR"])
 
     precision = float(np.mean(precisions)) if precisions else 0.0
     return {

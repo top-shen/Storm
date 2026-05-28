@@ -11,7 +11,7 @@ seed = 1337
 if_remove = False
 
 qlib_init = dict(
-    provider_uri=None,
+    provider_uri="workdir/qlib_data/dj30_17",
     region="us",
 )
 

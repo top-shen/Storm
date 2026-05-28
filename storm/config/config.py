@@ -11,6 +11,8 @@ def build_config(config_path: str, args: Namespace) -> Config:
 
     if args.cfg_options is None:
         cfg_options = dict()
+    elif isinstance(args.cfg_options, dict):
+        cfg_options = dict(args.cfg_options)
     else:
         cfg_options = dict()
         for cfg_option in args.cfg_options:

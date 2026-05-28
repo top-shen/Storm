@@ -18,7 +18,7 @@ sys.path.append(root)
 from storm.config import build_config
 from storm.log import logger
 from storm.models.storm_lstm import StormLSTM
-from storm.qlib_adapter import calc_prediction_metrics, build_prediction_payload
+from storm.qlib_adapter import calc_prediction_metrics, build_prediction_payload, save_top_stock_suggestions
 from storm.registry import COLLATE_FN, DATASET
 from storm.utils import assemble_project_path, convert_int_to_timestamp, get_model_numel, save_joblib
 
@@ -378,6 +378,8 @@ def main(args):
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(test_stats) + "\n")
         logger.info(f"| STORM LSTM test stats: {test_stats}")
+        suggestions_path = save_top_stock_suggestions(config.exp_path, split="test", topk=3)
+        logger.info(f"| Saved top-3 stock suggestions: {suggestions_path}")
 
 
 if __name__ == "__main__":

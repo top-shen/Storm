@@ -15,7 +15,7 @@ from mmengine import DictAction
 
 from storm.config import build_config
 from storm.log import logger
-from storm.qlib_adapter import apply_qlib_like_processors, build_qlib_dataframe, calc_prediction_metrics, build_prediction_payload_from_frame
+from storm.qlib_adapter import apply_qlib_like_processors, build_qlib_dataframe, calc_prediction_metrics, build_prediction_payload_from_frame, save_top_stock_suggestions
 from storm.utils import assemble_project_path, load_joblib, save_joblib
 
 
@@ -169,6 +169,8 @@ def main(args):
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:
             f.write(json.dumps(stats) + "\n")
         logger.info(f"| Qlib LSTM test stats: {stats}")
+        suggestions_path = save_top_stock_suggestions(config.exp_path, split="test", topk=3)
+        logger.info(f"| Saved top-3 stock suggestions: {suggestions_path}")
 
 
 if __name__ == "__main__":

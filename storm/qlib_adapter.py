@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Dict, Iterable, List
 
 import numpy as np
@@ -7,6 +8,7 @@ import pandas as pd
 from storm.downstream.portfolio import TopkDropoutStrategy
 from storm.utils import assemble_project_path
 from storm.utils import load_json
+from storm.utils import load_joblib
 
 
 def _load_assets(assets_path: str) -> List[str]:
@@ -463,3 +465,74 @@ def build_prediction_payload_from_frame(
         merged[("label", label_column)].to_numpy(),
     )
     return merged, payload
+
+
+def save_top_stock_suggestions(
+    exp_path: str,
+    split: str = "test",
+    topk: int = 3,
+    date: str = "latest",
+    out_file: str = "top3_stock_suggestions.json",
+) -> str:
+    prediction_path = os.path.join(exp_path, f"{split}_predictions.joblib")
+    payload = load_joblib(prediction_path)
+    if payload is None:
+        raise FileNotFoundError(f"Prediction file not found: {prediction_path}")
+
+    required = ("end_timestamp", "asset", "pred_label", "true_label")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise KeyError(f"{prediction_path} missing keys: {missing}")
+
+    frame = pd.DataFrame(
+        {
+            "end_timestamp": pd.to_datetime(payload["end_timestamp"]).strftime("%Y-%m-%d"),
+            "asset": [str(asset) for asset in payload["asset"]],
+            "pred_label": np.asarray(payload["pred_label"], dtype=np.float64),
+            "true_label": np.asarray(payload["true_label"], dtype=np.float64),
+        }
+    )
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=["pred_label"])
+    if frame.empty:
+        raise ValueError(f"No valid prediction rows found in {prediction_path}")
+
+    available_dates = sorted(frame["end_timestamp"].unique())
+    if date == "latest":
+        selected_date = available_dates[-1]
+    else:
+        selected_date = pd.Timestamp(date).strftime("%Y-%m-%d")
+        if selected_date not in set(available_dates):
+            raise ValueError(
+                f"Date {selected_date} not found in {prediction_path}; "
+                f"available range: {available_dates[0]} -> {available_dates[-1]}"
+            )
+
+    day = frame[frame["end_timestamp"] == selected_date].copy()
+    day = day.sort_values(["pred_label", "asset"], ascending=[False, True]).reset_index(drop=True)
+    day["rank"] = np.arange(1, len(day) + 1)
+
+    suggestions = []
+    for row in day.head(topk).itertuples(index=False):
+        suggestions.append(
+            {
+                "rank": int(row.rank),
+                "asset": row.asset,
+                "pred_label": float(row.pred_label),
+                "true_label": float(row.true_label),
+            }
+        )
+
+    result = {
+        "split": split,
+        "date": selected_date,
+        "topk": int(topk),
+        "source": prediction_path,
+        "note": "Model-score ranking only; not financial advice.",
+        "suggestions": suggestions,
+    }
+
+    out_path = os.path.join(exp_path, out_file)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+        f.write("\n")
+    return out_path

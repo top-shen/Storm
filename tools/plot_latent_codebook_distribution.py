@@ -60,7 +60,7 @@ def _parse_args():
     parser.add_argument(
         "--seed",
         type=int,
-        default=2026,
+        default=42,
         help="Random seed for sampling and projection.",
     )
     parser.add_argument(
@@ -101,6 +101,8 @@ def _parse_args():
     )
     parser.add_argument(
         "--annotate-every",
+        "--annotate-codebook-every",
+        dest="annotate_every",
         type=int,
         default=16,
         help="Annotate every N-th codebook index when --annotate-codebook=every.",
@@ -246,25 +248,23 @@ def _extract_factor_tokens(state_obj, codebook_dim: int, factor_part: str):
 
 
 def _sample_rows(x: np.ndarray, num_samples: int, seed: int):
-    if num_samples <= 0 or num_samples >= x.shape[0]:
-        return x
-    rng = np.random.default_rng(seed)
-    indices = rng.choice(x.shape[0], size=num_samples, replace=False)
+    indices = _sample_row_indices(x.shape[0], num_samples, seed)
     return x[indices]
 
 
-def _standardize(x: np.ndarray):
-    mean = x.mean(axis=0, keepdims=True)
-    std = x.std(axis=0, keepdims=True)
-    std[std < 1e-8] = 1.0
-    return (x - mean) / std
+def _sample_row_indices(n_rows: int, num_samples: int, seed: int):
+    if num_samples <= 0 or num_samples >= n_rows:
+        return np.arange(n_rows, dtype=np.int64)
+    rng = np.random.default_rng(seed)
+    return rng.choice(n_rows, size=num_samples, replace=False).astype(np.int64, copy=False)
 
 
 def _pre_pca(x: np.ndarray, n_dims: int):
     if n_dims <= 0 or n_dims >= x.shape[1]:
         return x
-    _u, _s, vt = np.linalg.svd(x, full_matrices=False)
-    return x @ vt[:n_dims].T
+    centered = x - x.mean(axis=0, keepdims=True)
+    _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
+    return centered @ vt[:n_dims].T
 
 
 def _project_2d(
@@ -277,14 +277,15 @@ def _project_2d(
     umap_neighbors: int,
     umap_min_dist: float,
 ):
-    x = _standardize(x).astype(np.float32, copy=False)
-
     if method == "pca":
-        _u, s, vt = np.linalg.svd(x, full_matrices=False)
+        x = np.asarray(x, dtype=np.float64)
+        centered = x - x.mean(axis=0, keepdims=True)
+        _u, s, vt = np.linalg.svd(centered, full_matrices=False)
         total_var = float(np.sum(s ** 2))
         explained = (s[:2] ** 2) / total_var if total_var > 0 else np.zeros(2, dtype=np.float64)
-        return x @ vt[:2].T, {"pc1_var": float(explained[0]), "pc2_var": float(explained[1])}
+        return centered @ vt[:2].T, {"pc1_var": float(explained[0]), "pc2_var": float(explained[1])}
 
+    x = np.asarray(x, dtype=np.float64)
     x = _pre_pca(x, pre_pca_dim).astype(np.float32, copy=False)
 
     if method == "tsne":

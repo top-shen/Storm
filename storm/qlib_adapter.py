@@ -358,8 +358,8 @@ def calc_prediction_metrics(
     for _, group in merged.groupby(level=0):
         if len(group) < 2:
             continue
-        pred_groups.append(group[("prediction", pred_name)].to_numpy(dtype=np.float64)[None, :])
-        true_groups.append(group[("label", label_column)].to_numpy(dtype=np.float64)[None, :])
+        pred_groups.append(group[("prediction", pred_name)].to_numpy(dtype=np.float64))
+        true_groups.append(group[("label", label_column)].to_numpy(dtype=np.float64))
 
     if pred_groups:
         ic_values = _calc_ic_np(pred_groups, true_groups)

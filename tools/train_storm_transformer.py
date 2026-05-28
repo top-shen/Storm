@@ -25,7 +25,7 @@ from storm.utils import assemble_project_path, convert_int_to_timestamp, get_mod
 
 def get_args_parser():
     parser = argparse.ArgumentParser(description="Train/test STORM-style Transformer baseline for dj30_17")
-    parser.add_argument("--config", default=os.path.join("configs", "exp", "predict", "predict_day_dj30_17_storm_transformer.py"))
+    parser.add_argument("--config", default=os.path.join("configs", "exp", "predict", "predict_day_dj30_17_storm_transformer_s3.py"))
     parser.add_argument("--cfg-options", nargs="+", action=DictAction)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--train", action="store_true")

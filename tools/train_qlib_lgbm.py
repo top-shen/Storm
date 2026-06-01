@@ -4,6 +4,7 @@ import os
 import pathlib
 import sys
 
+import numpy as np
 import pandas as pd
 
 root = str(pathlib.Path(__file__).resolve().parents[1])
@@ -76,6 +77,58 @@ def _save_predictions(exp_path, split, pred_series, label_df, label_column="ret1
     save_joblib(payload, os.path.join(exp_path, f"{split}_predictions.joblib"))
 
 
+def _fit_model(model, dataset, config):
+    fit_kwargs = dict(getattr(config, "fit", {}))
+    logger.info(f"| Qlib LGBM fit kwargs: {fit_kwargs}")
+    model.fit(dataset, **fit_kwargs)
+
+
+def _get_lgbm_tree_count(model):
+    booster = getattr(model, "model", None)
+    if booster is None:
+        return None
+
+    for method_name in ("num_trees", "current_iteration"):
+        method = getattr(booster, method_name, None)
+        if callable(method):
+            try:
+                value = int(method())
+                if value >= 0:
+                    return value
+            except Exception:
+                pass
+    return None
+
+
+def _prediction_diagnostics(pred_series):
+    if pred_series.empty:
+        return {
+            "latest_date": None,
+            "latest_unique_pred": 0,
+            "collapsed_days": 0,
+            "total_days": 0,
+        }
+
+    frame = pred_series.rename("score").to_frame()
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=["score"])
+    if frame.empty:
+        return {
+            "latest_date": None,
+            "latest_unique_pred": 0,
+            "collapsed_days": 0,
+            "total_days": 0,
+        }
+
+    per_day_unique = frame.groupby(level=0)["score"].nunique()
+    latest_date = per_day_unique.index.max()
+    return {
+        "latest_date": latest_date.strftime("%Y-%m-%d") if hasattr(latest_date, "strftime") else str(latest_date),
+        "latest_unique_pred": int(per_day_unique.loc[latest_date]),
+        "collapsed_days": int((per_day_unique <= 1).sum()),
+        "total_days": int(per_day_unique.shape[0]),
+    }
+
+
 def _evaluate(model, dataset, exp_path, label_column="ret1", splits=("train", "valid", "test")):
     stats = {}
     for split in splits:
@@ -84,6 +137,13 @@ def _evaluate(model, dataset, exp_path, label_column="ret1", splits=("train", "v
         if isinstance(pred, pd.DataFrame):
             pred = pred.iloc[:, 0]
         pred.name = "score"
+        pred_diag = _prediction_diagnostics(pred)
+        logger.info(f"| Qlib LGBM {split} prediction diagnostics: {pred_diag}")
+        if pred_diag["latest_unique_pred"] <= 1:
+            logger.warning(
+                f"| Qlib LGBM {split} latest-date predictions are collapsed; "
+                "rankings for that date will be tie-broken by asset symbol."
+            )
         metrics = calc_prediction_metrics(label_df, pred, label_column=label_column)
         _save_predictions(exp_path, split, pred, label_df, label_column=label_column)
         stats.update({f"{split}_{k}": v for k, v in metrics.items()})
@@ -112,7 +172,15 @@ def main(args):
 
     if args.train:
         model = LGBModel(**config.model)
-        model.fit(dataset)
+        _fit_model(model, dataset, config)
+        tree_count = _get_lgbm_tree_count(model)
+        if tree_count is not None:
+            logger.info(f"| Qlib LGBM tree count: {tree_count}")
+            if tree_count <= 1:
+                logger.warning(
+                    "| Qlib LGBM has one or fewer trees after fitting; "
+                    "the model is likely collapsed and predictions may be constant."
+                )
         save_joblib(model, model_path)
         logger.info(f"| Saved Qlib LGBM model: {model_path}")
 
@@ -127,6 +195,14 @@ def main(args):
         if model is None:
             raise FileNotFoundError(f"Qlib LGBM checkpoint not found: {ckpt}")
         logger.info(f"| Load Qlib LGBM model: {ckpt}")
+        tree_count = _get_lgbm_tree_count(model)
+        if tree_count is not None:
+            logger.info(f"| Qlib LGBM tree count: {tree_count}")
+            if tree_count <= 1:
+                logger.warning(
+                    "| Qlib LGBM checkpoint has one or fewer trees; "
+                    "this checkpoint should be retrained with the updated config."
+                )
 
         stats = _evaluate(model, dataset, config.exp_path, label_column=config.label_column)
         with open(os.path.join(config.exp_path, "test_log.txt"), "w", encoding="utf-8") as f:

@@ -54,9 +54,24 @@ segments = dict(
 
 model = dict(
     loss="mse",
+    num_boost_round=200,
+    early_stopping_rounds=0,
+    learning_rate=0.03,
+    num_leaves=31,
+    max_depth=6,
+    min_data_in_leaf=20,
+    feature_fraction=0.8,
+    bagging_fraction=0.8,
+    bagging_freq=1,
+    lambda_l1=0.0,
+    lambda_l2=1.0,
+    num_threads=20,
     seed=seed,
 )
 
-
-
+fit = dict(
+    num_boost_round=200,
+    early_stopping_rounds=0,
+    verbose_eval=20,
+)
 
